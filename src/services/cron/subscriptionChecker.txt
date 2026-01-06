@@ -1,0 +1,182 @@
+import { prisma } from '../../database/prisma';
+import { bot } from '../../bot';
+import { checkUserGroups } from '../../modules/subscription/checker';
+import { UserStatus, SubscriptionLevel, config } from '../../config';
+import { logEvent } from '../../modules/statistics/logger';
+import { BotContext } from '../../types/context';
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export const checkAllSubscriptions = async () => {
+  try {
+    const ctx = { telegram: bot.telegram } as BotContext;
+
+    // 1) Проверяем активных — кто вышел из групп
+    const activeUsers = await prisma.user.findMany({
+      where: {
+        status: UserStatus.ACTIVE,
+        isFrozen: false,
+      },
+      select: {
+        telegramId: true,
+        username: true,
+        subscriptionLevel: true,
+      },
+    });
+
+    console.log(`Checking ${activeUsers.length} active subscriptions...`);
+
+    let frozenCount = 0;
+    let renewedLevelCount = 0;
+    let restoredCount = 0;
+
+    for (const user of activeUsers) {
+      try {
+        const membershipInfo = await checkUserGroups(ctx, user.telegramId);
+
+        if (!membershipInfo.level) {
+          // Вышел — замораживаем и истекаем
+          await prisma.user.update({
+            where: { telegramId: user.telegramId },
+            data: {
+              isFrozen: true,
+              status: UserStatus.EXPIRED,
+            },
+          });
+
+          frozenCount++;
+
+          // Уведомим пользователя
+          try {
+            await bot.telegram.sendMessage(
+              Number(user.telegramId),
+              '⚠️ Ваша подписка приостановлена.\n\n' +
+                'Вы больше не состоите в группе подписчиков. ' +
+                'Для возобновления доступа продлите подписку на Boosty.'
+            );
+          } catch {
+            console.log(`Cannot send message to user ${user.telegramId}`);
+          }
+
+          // Уведомим админа
+          await bot.telegram.sendMessage(
+            Number(config.bot.adminId),
+            `❌ Подписка заморожена\n\n` +
+              `Пользователь: @${user.username || 'unknown'}\n` +
+              `ID: ${user.telegramId}\n` +
+              `Уровень был: ${user.subscriptionLevel}`
+          );
+
+          await logEvent('cancel_subscription', user.telegramId, {
+            level: user.subscriptionLevel,
+            reason: 'not_in_group',
+          });
+
+          console.log(`❌ Frozen user ${user.telegramId}`);
+        } else {
+          // В группе — актуализируем уровень при необходимости
+          if (membershipInfo.level !== user.subscriptionLevel) {
+            await prisma.user.update({
+              where: { telegramId: user.telegramId },
+              data: { subscriptionLevel: membershipInfo.level },
+            });
+            renewedLevelCount++;
+
+            await bot.telegram.sendMessage(
+              Number(config.bot.adminId),
+              `🔄 Изменение подписки\n\n` +
+                `Пользователь: @${user.username || 'unknown'}\n` +
+                `ID: ${user.telegramId}\n` +
+                `Было: ${user.subscriptionLevel}\n` +
+                `Стало: ${membershipInfo.level}`
+            );
+
+            console.log(
+              `🔄 Updated user ${user.telegramId} level: ${user.subscriptionLevel} -> ${membershipInfo.level}`
+            );
+          }
+
+          // И на всякий случай — статус активен
+          await prisma.user.update({
+            where: { telegramId: user.telegramId },
+            data: { status: UserStatus.ACTIVE, isFrozen: false },
+          });
+        }
+
+        await sleep(100);
+      } catch (userError) {
+        console.error(`Error checking user ${user.telegramId}:`, userError);
+      }
+    }
+
+    // 2) Восстановим тех, кто был EXPIRED/заморожен, но вернулся в группы
+    const candidatesToRestore = await prisma.user.findMany({
+      where: {
+        OR: [{ status: UserStatus.EXPIRED }, { isFrozen: true }],
+      },
+      select: {
+        telegramId: true,
+        username: true,
+        subscriptionLevel: true,
+        status: true,
+        isFrozen: true,
+      },
+    });
+
+    for (const user of candidatesToRestore) {
+      try {
+        const membershipInfo = await checkUserGroups(ctx, user.telegramId);
+        if (membershipInfo.level) {
+          await prisma.user.update({
+            where: { telegramId: user.telegramId },
+            data: {
+              status: UserStatus.ACTIVE,
+              isFrozen: false,
+              subscriptionLevel: membershipInfo.level,
+            },
+          });
+
+          restoredCount++;
+
+          try {
+            await bot.telegram.sendMessage(
+              Number(user.telegramId),
+              '✅ Доступ восстановлен. Спасибо, что продлили подписку!'
+            );
+          } catch {}
+        }
+
+        await sleep(100);
+      } catch (e) {
+        console.error(`Restore check error for user ${user.telegramId}:`, e);
+      }
+    }
+
+    console.log(
+      `✅ Subscription check completed: ${frozenCount} frozen, ${renewedLevelCount} level-updated, ${restoredCount} restored`
+    );
+
+    // Отчёт админу
+    if (frozenCount > 0 || renewedLevelCount > 0 || restoredCount > 0) {
+      await bot.telegram.sendMessage(
+        Number(config.bot.adminId),
+        `📊 Отчет о проверке подписок\n\n` +
+          `Активных проверено: ${activeUsers.length}\n` +
+          `Заморожено: ${frozenCount}\n` +
+          `Уровень обновлен: ${renewedLevelCount}\n` +
+          `Восстановлено: ${restoredCount}`
+      );
+    }
+  } catch (error) {
+    console.error('Error in checkAllSubscriptions:', error);
+
+    try {
+      await bot.telegram.sendMessage(
+        Number(config.bot.adminId),
+        `❌ Ошибка при проверке подписок:\n${error}`
+      );
+    } catch (notifyError) {
+      console.error('Cannot notify admin:', notifyError);
+    }
+  }
+};

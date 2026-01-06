@@ -1,0 +1,166 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  telegramId          BigInt    @id
+  username            String?
+  firstName           String?   // Отображаемое имя из Телеграма
+  discordId           BigInt?
+  accessToken         String    @unique @default(uuid())
+  subscriptionLevel   String?
+  status              String    @default("inactive")
+  isLegacy            Boolean   @default(false)
+  isFrozen            Boolean   @default(false)
+  bannedAt            DateTime? // Когда забанили
+  banReason           String?   // Причина бана
+  notifyOnNewBuilds   Boolean   @default(true)
+  hasPromoAccess      Boolean   @default(false)
+  donationAmount      Int?  
+  expiresAtFragment   DateTime?
+  expiresAtPulse      DateTime?
+  expiresAtGearwire   DateTime?
+  expiresAtOuch       DateTime?
+  createdAt           DateTime  @default(now())
+  lastRenewedAt       DateTime?
+  passwordHash        String?   // Хэш пароля для API доступа
+  
+  supportTickets      SupportTicket[]
+  
+  @@map("users")
+}
+
+model Admin {
+  id                     Int      @id @default(autoincrement())
+  telegramId             BigInt   @unique
+  username               String?
+  role                   String   @default("admin")
+  isActive               Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  logActionsToLichka     Boolean  @default(false)
+  isPromoEnabled         Boolean  @default(false) 
+  renewalCheckInterval   Int      @default(3600)
+  securityCheckInterval  Int      @default(86400)
+  tokenLifetime          Int      @default(2678400)
+  wipeConfirmationCode   String?
+  wipeConfirmationTimestamp DateTime?
+  
+  @@map("admins")
+}
+
+model SupportAgent {
+  id          Int      @id @default(autoincrement())
+  telegramId  BigInt   @unique
+  username    String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  
+  @@map("support_agents")
+}
+
+model SupportTicket {
+  id              Int      @id @default(autoincrement())
+  userId          BigInt
+  agentId         BigInt?
+  assignedBy      BigInt?
+  status          String   @default("open")
+  createdAt       DateTime @default(now())
+  closedAt        DateTime?
+  reassignedCount Int      @default(0)
+  
+  user        User     @relation(fields: [userId], references: [telegramId])
+  messages    TicketMessage[]
+  
+  @@map("support_tickets")
+}
+
+model TicketMessage {
+  id          Int      @id @default(autoincrement())
+  ticketId    Int
+  senderId    BigInt
+  senderRole  String
+  message     String   @db.Text
+  photoUrl    String?
+  createdAt   DateTime @default(now())
+  
+  ticket      SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  
+  @@map("ticket_messages")
+}
+
+model StatisticEvent {
+  id          Int      @id @default(autoincrement())
+  eventType   String
+  userId      BigInt?
+  details     Json?
+  createdAt   DateTime @default(now())
+  
+  @@index([eventType])
+  @@index([userId])
+  @@index([createdAt])
+  
+  @@map("statistic_events")
+}
+
+model PromoRequest {
+  id          Int      @id @default(autoincrement())
+  userId      BigInt
+  username    String?
+  message     String?  @db.Text
+  photoUrl    String?
+  donationAmount Int? 
+  status      String   @default("pending")
+  createdAt   DateTime @default(now())
+  processedAt DateTime?
+  processedBy BigInt?
+  
+  @@map("promo_requests")
+}
+
+model ScheduledTask {
+  id           Int      @id @default(autoincrement())
+  userId       BigInt
+  taskType     String
+  groupId      BigInt?
+  scheduledFor DateTime
+  executed     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  executedAt   DateTime?
+  
+  @@index([scheduledFor, executed])
+  
+  @@map("scheduled_tasks")
+}
+
+// Модель для типа сборки (Fragment, Pulse и т.д.)
+model Build {
+  id          Int      @id @default(autoincrement())
+  name        String   // Напр. "Fragment", "Pulse"
+  codeName    String   @unique // Напр. "fragment", "pulse" (для кода)
+  description String?
+  
+  versions    BuildVersion[] // Связь с версиями
+  
+  @@map("builds")
+}
+
+// Модель для конкретной версии сборки
+model BuildVersion {
+  id          Int      @id @default(autoincrement())
+  buildId     Int
+  version     String   // Напр. "2.3.1"
+  description String?  @db.Text // Описание, которое ты пишешь при публикации
+  filePath    String   // Полный путь к файлу на сервере
+  fileSize    BigInt   // Размер файла в байтах
+  fileId      String?  // file_id в Telegram после первой отправки (для кэширования)
+  createdAt   DateTime @default(now())
+  
+  build       Build    @relation(fields: [buildId], references: [id], onDelete: Cascade)
+  
+  @@map("build_versions")
+}
