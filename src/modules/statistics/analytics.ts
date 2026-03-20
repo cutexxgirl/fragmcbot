@@ -167,7 +167,7 @@ export class Analytics {
         new: newSubscriptions,
         renewed: renewedSubscriptions,
         cancelled: cancelledSubscriptions,
-        cancelledPercent: this.percent(cancelledSubscriptions, newSubscriptions + renewedSubscriptions),
+        cancelledPercent: this.percent(cancelledSubscriptions, activeUsers + cancelledSubscriptions),
         renewalRate: renewalRate,
       },
       promo: {

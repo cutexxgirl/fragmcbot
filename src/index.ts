@@ -36,10 +36,7 @@ async function main() {
     await initializeAdmin();
 
     // Инициализируем сборки
-    await BuildManager.initialize();
-
-    // Запускаем CRON задачи
-    startCronJobs();
+    // await BuildManager.initialize();
 
     // Запускаем API
     await startAPI();

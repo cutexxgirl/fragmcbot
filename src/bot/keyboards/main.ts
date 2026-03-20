@@ -2,20 +2,23 @@ import { Markup } from 'telegraf';
 import { User } from '@prisma/client';
 
 // Ссылка на скачивание лаунчера 
-const LAUNCHER_URL = 'https://github.com/cutexxgirl/';
+const LAUNCHER_URL = 'https://github.com/cutexxgirl/Fragment-Launcher-Public/releases/download/1.1.0/FragmentLauncher-setup-1.1.0.exe'
 
 export const mainKeyboard = (user: Pick<User, 'status' | 'isFrozen' | 'hasPromoAccess'>, isAdmin: boolean) => {
   const buttons = [['👤 Профиль', '🆘 Поддержка']];
 
-  const showDownload = user.status === 'active' && !user.isFrozen;
+  const showDownload = (user.status === 'active' || user.status === 'shared') && !user.isFrozen;
 
-  if (!showDownload && user.hasPromoAccess) { 
-    buttons.push(['🎁 Акция']);
+  if (!showDownload) {
+      if (user.hasPromoAccess) {
+         // buttons.push(['🎁 Акция']); 
+      }
+      buttons.push(['📖 Инструкция']);
   }
   
   if (showDownload) {
       buttons.push(['🚀 Скачать лаунчер']);
-      buttons.push(['✈️ Канал', '💬 Discord']);
+      buttons.push(['✈️ Канал']);
   }
 
   if (isAdmin) {

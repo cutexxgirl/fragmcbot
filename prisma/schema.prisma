@@ -9,30 +9,56 @@ datasource db {
 
 model User {
   telegramId          BigInt    @id
+  fragmentId          String?   @unique // Уникальный ID формата ABC-XYZ
   username            String?
   firstName           String?   // Отображаемое имя из Телеграма
   discordId           BigInt?
   accessToken         String    @unique @default(uuid())
-  subscriptionLevel   String?
-  status              String    @default("inactive")
-  isLegacy            Boolean   @default(false)
+  subscriptionLevel   String?   // novice, adept, legend, spark
+  status              String    @default("inactive") // inactive, active, expired, shared
   isFrozen            Boolean   @default(false)
   bannedAt            DateTime? // Когда забанили
   banReason           String?   // Причина бана
   notifyOnNewBuilds   Boolean   @default(true)
   hasPromoAccess      Boolean   @default(false)
   donationAmount      Int?  
-  expiresAtFragment   DateTime?
-  expiresAtPulse      DateTime?
-  expiresAtGearwire   DateTime?
-  expiresAtOuch       DateTime?
+  expiresAtFragment   DateTime? // Основная сборка
+  expiresAtExtra      DateTime? // Доп. сборки 
+  giftedById          BigInt?   // Кто подарил доступ (для status='shared')
   createdAt           DateTime  @default(now())
+  lastActiveAt        DateTime? // Последняя активность (бот/API/webapp)
   lastRenewedAt       DateTime?
   passwordHash        String?   // Хэш пароля для API доступа
   
+  // Anti-bruteforce for promo
+  promoAttempts       Int       @default(0)
+  lastPromoAttemptAt  DateTime? 
+  
+  privateChannelLinkSent Boolean @default(false)
+  lastPrivateLinkAt   DateTime? // Для анти-спама ссылками
+  
   supportTickets      SupportTicket[]
+  sharedByMe          SharedAccess[] @relation("Owner")   // Кому я выдал доступ
+  sharedToMe          SharedAccess[] @relation("Guest")   // Кто мне выдал доступ
+  promoActivations    PromoActivation[]
+  invites             Invite[]
   
   @@map("users")
+}
+
+// Система "Поделиться подпиской" для Легенды/Искры
+model SharedAccess {
+  id              Int      @id @default(autoincrement())
+  ownerId         BigInt    // Кто выдал (Legend/Spark)
+  guestId         BigInt    // Кому выдали
+  expiresAt       DateTime  // Когда истекает доступ
+  createdAt       DateTime  @default(now())
+  
+  owner           User      @relation("Owner", fields: [ownerId], references: [telegramId], onDelete: Cascade)
+  guest           User      @relation("Guest", fields: [guestId], references: [telegramId], onDelete: Cascade)
+  
+  @@unique([ownerId, guestId])
+  @@map("shared_access")
 }
 
 model Admin {
@@ -154,13 +180,54 @@ model BuildVersion {
   id          Int      @id @default(autoincrement())
   buildId     Int
   version     String   // Напр. "2.3.1"
-  description String?  @db.Text // Описание, которое ты пишешь при публикации
+  description String?  @db.Text // Описание
   filePath    String   // Полный путь к файлу на сервере
   fileSize    BigInt   // Размер файла в байтах
-  fileId      String?  // file_id в Telegram после первой отправки (для кэширования)
+  fileId      String?  // file_id в Telegram после первой отправки
   createdAt   DateTime @default(now())
   
   build       Build    @relation(fields: [buildId], references: [id], onDelete: Cascade)
   
   @@map("build_versions")
+}
+
+// --- ПРОМОКОДЫ ---
+model PromoCode {
+  id              Int      @id @default(autoincrement())
+  code            String   @unique
+  validUntil      DateTime? // Срок жизни самого кода (null = вечный)
+  grantDays       Int      // На сколько дней дает доступ
+  grantLevel      String   @default("novice") // Какой уровень дает
+  maxActivations  Int      @default(1) // Сколько человек может активировать (-1 = бесконечно)
+  activationsCount Int     @default(0) // Текущее кол-во активаций
+  isActive        Boolean  @default(true) // Рубильник
+  createdAt       DateTime @default(now())
+  
+  activations     PromoActivation[]
+  
+  @@map("promo_codes")
+}
+
+model PromoActivation {
+  id          Int      @id @default(autoincrement())
+  userId      BigInt
+  promoId     Int
+  activatedAt DateTime @default(now())
+  
+  user        User      @relation(fields: [userId], references: [telegramId])
+  promo       PromoCode @relation(fields: [promoId], references: [id])
+  
+  @@unique([userId, promoId]) // Один код - один раз на юзера
+  @@map("promo_activations")
+}
+
+model Invite {
+  id         Int      @id @default(autoincrement())
+  inviteLink String   @unique
+  userId     BigInt
+  createdAt  DateTime @default(now())
+  
+  user       User     @relation(fields: [userId], references: [telegramId])
+  
+  @@map("invites")
 }

@@ -78,11 +78,12 @@ export class SupportSystem {
 
     const mentionAgents = agents.map((agent: { telegramId: bigint }) => `[👤](tg://user?id=${agent.telegramId})`).join(' ');
 
+    const safeUsername = username ? username.replace(/_/g, '\\_') : undefined;
     const headerText = `
 🆘 **НОВЫЙ ТИКЕТ #${ticket.id}**
 ${mentionAgents}
 
-👤 **Пользователь:** ${username ? '@' + username : 'Нет username'}
+👤 **Пользователь:** ${safeUsername ? '@' + safeUsername : 'Нет username'}
 🆔 **ID:** \`${userId}\`
 
 📋 **Профиль:**
@@ -197,13 +198,19 @@ ${profileInfo}
       ? SUBSCRIPTION_NAMES[user.subscriptionLevel as SubscriptionLevel] 
       : 'Нет';
 
-    const subscriptionStatus = (user.status === 'active' && !user.isFrozen) ? '✅ Активна' : '❌ Не активна';
+    const subscriptionStatus = (user.status === 'active' && !user.isFrozen) ? '✅ Активна' : 
+      (user.status === 'shared' ? '🎁 Подарено' : '❌ Не активна');
+
+    const extraAccess = user.expiresAtExtra && user.expiresAtExtra > new Date() 
+      ? `✅ до ${formatDate(user.expiresAtExtra)}` 
+      : 'Нет';
 
     return `
+• FID: ${user.fragmentId || 'Не сгенерирован'}
 • Подписка: ${subscriptionStatus}
 • Уровень: ${subscriptionLevelName}
 • До: ${formatDate(user.expiresAtFragment)}
-• Legacy: ${user.isLegacy ? '⭐ Да' : 'Нет'}
+• Доп. сборки: ${extraAccess}
 • Заморожен: ${user.isFrozen ? '🔒 Да' : 'Нет'}
     `.trim();
   }
@@ -396,7 +403,8 @@ ${profileInfo}
 
     if (isUser) {
       // От пользователя в группу
-      const usernameDisplay = ticket.user.username ? `@${ticket.user.username}` : 'Нет username';
+    const username = ticket.user.username ? ticket.user.username.replace(/_/g, '\\_') : null;
+    const usernameDisplay = username ? `@${username}` : 'Нет username';
       let headerText = `📩 **Тикет #${ticketId}**\n👤 ${usernameDisplay} | 🆔 \`${ticket.userId}\``;
       
       if (ticket.agentId) {
@@ -404,7 +412,8 @@ ${profileInfo}
           where: { telegramId: ticket.agentId },
         });
         if (agent) {
-          headerText += `\n🔔 [Агент](tg://user?id=${ticket.agentId}) @${agent.username || 'no_username'}`;
+          const agentName = agent.username ? agent.username.replace(/_/g, '\\_') : 'no\\_username';
+          headerText += `\n🔔 [Агент](tg://user?id=${ticket.agentId}) @${agentName}`;
         }
       }
       

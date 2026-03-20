@@ -21,7 +21,16 @@ export const checkUserGroups = async (
   const userIdNum = Number(userId);
 
   try {
-    // 1. LEGEND (самый высокий приоритет)
+    // 0. SPARK (самый-самый высокий приоритет)
+    try {
+      const member = await ctx.telegram.getChatMember(String(config.groups.spark), userIdNum);
+      if (isInChat(member.status)) {
+        membershipInfo.level = SubscriptionLevel.SPARK;
+        return membershipInfo;
+      }
+    } catch {}
+
+    // 1. LEGEND (высокий приоритет)
     try {
       const member = await ctx.telegram.getChatMember(String(config.groups.legend), userIdNum);
       if (isInChat(member.status)) {

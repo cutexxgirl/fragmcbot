@@ -3,46 +3,7 @@ import { prisma } from '../../database/prisma';
 import { UserStatus, SubscriptionLevel, SUBSCRIPTION_NAMES } from '../../config';
 import { Markup } from 'telegraf';
 
-export const toggleNotifications = async (ctx: BotContext) => {
-  try {
-    if (!ctx.match) return;
-    
-    const userId = BigInt(ctx.match[1]);
-    
-    // Проверка что пользователь меняет свои настройки
-    if (userId !== BigInt(ctx.from!.id)) {
-      await ctx.answerCbQuery('❌ Вы можете менять только свои настройки');
-      return;
-    }
 
-    const user = await prisma.user.findUnique({
-      where: { telegramId: userId },
-    });
-
-    if (!user) return;
-
-    // Переключаем настройку
-    const newValue = !user.notifyOnNewBuilds;
-    
-    await prisma.user.update({
-      where: { telegramId: userId },
-      data: { notifyOnNewBuilds: newValue },
-    });
-
-    const message = newValue 
-      ? '🔔 Уведомления о новых версиях включены'
-      : '🔕 Уведомления о новых версиях выключены';
-
-    await ctx.answerCbQuery(message);
-    
-    // Обновляем профиль
-    await profileHandler(ctx);
-    
-  } catch (error) {
-    console.error('Error toggling notifications:', error);
-    await ctx.answerCbQuery('❌ Ошибка');
-  }
-};
 
 export const profileHandler = async (ctx: BotContext) => {
   try {
@@ -59,7 +20,7 @@ export const profileHandler = async (ctx: BotContext) => {
 
     const now = new Date();
 
-    // HTML экранирование (важно для < > & ")
+    // HTML экранирование
     const esc = (s: unknown) =>
       String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c] as string));
 
@@ -94,17 +55,27 @@ export const profileHandler = async (ctx: BotContext) => {
     const lines: string[] = [
       `👤 <b>Пользователь:</b> ${username}`,
       `🆔 <b>ID:</b> <code>${esc(user.telegramId)}</code>`,
-      '',
     ];
 
-    // Статус подписки Fragment
-    const isFragmentActive = user.status === UserStatus.ACTIVE && !user.isFrozen;
-    const fragmentIcon = isFragmentActive ? '✅' : '❌';
+    // Fragment ID
+    if (user.fragmentId) {
+      lines.push(`🔖 <b>FID:</b> <code>${esc(user.fragmentId)}</code>`);
+    }
+    lines.push('');
+
+    // Статус подписки
+    const isActive = (user.status === UserStatus.ACTIVE || user.status === UserStatus.SHARED) && !user.isFrozen;
+    const statusIcon = isActive ? '✅' : '❌';
     const levelName = user.subscriptionLevel
       ? SUBSCRIPTION_NAMES[user.subscriptionLevel as SubscriptionLevel]
       : 'Нет';
 
-    lines.push(`${fragmentIcon} <b>Подписка Fragment:</b> ${esc(levelName)}`);
+    // Статус для подаренного доступа
+    if (user.status === UserStatus.SHARED) {
+      lines.push(`🎁 <b>Подаренный доступ:</b> ✅ Активен`);
+    } else {
+      lines.push(`${statusIcon} <b>Подписка:</b> ${esc(levelName)}`);
+    }
 
     if (user.expiresAtFragment) {
       const fragmentExpiry = formatExpiry(user.expiresAtFragment);
@@ -115,61 +86,32 @@ export const profileHandler = async (ctx: BotContext) => {
 
     // Токен доступа
     lines.push('');
-    if (isFragmentActive && user.accessToken) {
+    if (isActive && user.accessToken) {
       lines.push(`🔑 <b>Токен доступа:</b> <code>${esc(user.accessToken)}</code>`);
       lines.push(`   └ Активен`);
     } else {
       lines.push(`🔑 <b>Токен доступа:</b> ❌ Неактивен`);
     }
 
-    // Legacy статус
-    if (user.isLegacy) {
-      lines.push('');
-      lines.push('⭐ <b>Legacy статус:</b> ✅ Активен');
-    }
-
-    // Дополнительные сборки
-    const additionalBuilds: string[] = [];
-
-    if (user.expiresAtPulse) {
-      const pulseExpiry = formatExpiry(user.expiresAtPulse);
-      const diff = user.expiresAtPulse.getTime() - now.getTime();
-      if (pulseExpiry && diff > 0) {
-        additionalBuilds.push(`🔵 <b>Pulse:</b> ${pulseExpiry}`);
+    // Дополнительные сборки (через expiresAtExtra)
+    if (user.expiresAtExtra) {
+      const extraExpiry = formatExpiry(user.expiresAtExtra);
+      const diff = user.expiresAtExtra.getTime() - now.getTime();
+      if (extraExpiry && diff > 0) {
+        lines.push('');
+        lines.push(`📦 <b>Доп. сборки:</b> ${extraExpiry}`);
       }
     }
 
-    if (user.expiresAtGearwire) {
-      const gearwireExpiry = formatExpiry(user.expiresAtGearwire);
-      const diff = user.expiresAtGearwire.getTime() - now.getTime();
-      if (gearwireExpiry && diff > 0) {
-        additionalBuilds.push(`🟢 <b>Gear&amp;Wire:</b> ${gearwireExpiry}`); // <- экранируем &
-      }
-    }
-
-    if (user.expiresAtOuch) {
-      const ouchExpiry = formatExpiry(user.expiresAtOuch);
-      const diff = user.expiresAtOuch.getTime() - now.getTime();
-      if (ouchExpiry && diff > 0) {
-        additionalBuilds.push(`🟡 <b>Ouch:</b> ${ouchExpiry}`);
-      }
-    }
-
-    if (additionalBuilds.length > 0) {
-      lines.push('');
-      lines.push('<b>📦 Дополнительные сборки:</b>');
-      lines.push(...additionalBuilds);
-    }
-
-    // Даты регистрации и продления
+    // Даты
     lines.push('');
     lines.push(`🕒 <b>Регистрация:</b> ${esc(user.createdAt.toLocaleDateString('ru-RU'))}`);
     
     if (user.lastRenewedAt) {
-      lines.push(`🔄 <b>Последнее продление:</b> ${esc(user.lastRenewedAt.toLocaleDateString('ru-RU'))}`);
+      lines.push(`🔄 <b>Продление:</b> ${esc(user.lastRenewedAt.toLocaleDateString('ru-RU'))}`);
     }
 
-    // Статусы
+    // Предупреждения
     if (user.isFrozen) {
       lines.push('');
       lines.push('⚠️ <b>Статус:</b> Заморожен');
@@ -177,22 +119,24 @@ export const profileHandler = async (ctx: BotContext) => {
 
     if (user.status === UserStatus.EXPIRED) {
       lines.push('');
-      lines.push('⚠️ <b>Подписка истекла.</b> Продлите доступ на Boosty.');
+      lines.push('⚠️ <b>Подписка истекла.</b> Продлите на Boosty.');
     }
 
-    // Кнопки управления
-    const notifyIcon = user.notifyOnNewBuilds ? '🔔' : '🔕';
-    const notifyText = user.notifyOnNewBuilds ? 'Уведомления вкл.' : 'Уведомления выкл.';
+    // Кнопка переключения уведомлений удалена
+    const passwordBtnText = user.passwordHash ? '🔐 Изменить пароль' : '🔐 Установить пароль';
     
-    // Текст кнопки пароля зависит от наличия пароля
-    const passwordBtnText = user.passwordHash 
-      ? '🔐 Изменить пароль' 
-      : '🔐 Установить пароль';
-    
-    const keyboard = Markup.inlineKeyboard([
-      [Markup.button.callback(`${notifyIcon} ${notifyText}`, `toggle_notify_${userId}`)],
+    // Кнопка дарения для Legend/Spark
+    const buttons = [
       [Markup.button.callback(passwordBtnText, 'set_password')]
-    ]);
+    ];
+
+    // Кнопка "Подарить доступ" для Legend/Spark
+    if (user.subscriptionLevel === SubscriptionLevel.LEGEND || 
+        user.subscriptionLevel === SubscriptionLevel.SPARK) {
+      buttons.push([Markup.button.callback('🎁 Подарить доступ', 'share_access')]);
+    }
+
+    const keyboard = Markup.inlineKeyboard(buttons);
 
     await ctx.reply(lines.join('\n'), {
       parse_mode: 'HTML',
@@ -201,6 +145,6 @@ export const profileHandler = async (ctx: BotContext) => {
 
   } catch (error) {
     console.error('❌ Error in profile handler:', error);
-    await ctx.reply(`❌ Произошла ошибка при получении профиля: ${error}`);
+    await ctx.reply(`❌ Произошла ошибка: ${error}`);
   }
 };

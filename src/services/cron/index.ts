@@ -2,8 +2,13 @@ import cron from 'node-cron';
 import { prisma } from '../../database/prisma';
 import { UserStatus } from '../../config';
 import { syncUserStatus } from '../../modules/lifecycle';
+import { validateSharedAccess } from '../../modules/lifecycle/sharing';
 
-export const startCronJobs = () => {
+import { BotContext } from '../../types/context';
+import { Telegraf } from 'telegraf';
+import { sendPrivateChannelNotifications } from './notifications';
+
+export const startCronJobs = (bot: Telegraf<BotContext>) => {
   console.log('🕐 Initializing CRON jobs...');
 
   // Единая cron-задача каждые 5 минут
@@ -68,8 +73,23 @@ export const startCronJobs = () => {
     }
   });
 
+  // Проверка подаренных доступов каждый час
+  cron.schedule('0 * * * *', async () => {
+      try {
+          await validateSharedAccess();
+      } catch (e) {
+          console.error('[Cron] Shared access validation failed:', e);
+      }
+  });
+
+  // Уведомления о закрытом канале (каждую минуту)
+  cron.schedule('* * * * *', async () => {
+       await sendPrivateChannelNotifications(bot);
+  });
+
   console.log('✅ CRON jobs started successfully');
   console.log('   - Lifecycle sync: every 5 minutes');
+  console.log('   - Shared access sync: every hour');
 };
 
 /**

@@ -10,7 +10,8 @@ export type EventType =
   | 'promo_click'
   | 'promo_approved'
   | 'promo_rejected'
-  | 'download_build';
+  | 'download_build'
+  | 'promo_code_activation';
 
 export const logEvent = async (
   eventType: EventType,

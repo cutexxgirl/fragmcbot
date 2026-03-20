@@ -25,8 +25,19 @@ bot.use(session({
     awaitingBuildFile: undefined,
     awaitingUserSearch: false,
     awaitingAccessDays: undefined,
+    awaitingShareUser: false
   }),
 }));
+
+// --- DEBUG: LOG ALL UPDATES ---
+// bot.use(async (ctx, next) => {
+//   // console.log(`[DEBUG] Update received: ${ctx.updateType}`);
+//   // if (ctx.chat) console.log(`[DEBUG] Chat ID: ${ctx.chat.id}`);
+//   // if (ctx.updateType === 'chat_member') {
+//   //     console.log(`[DEBUG] CHAT_MEMBER UPDATE RAW:`, JSON.stringify(ctx.update, null, 2));
+//   // }
+//   await next();
+// });
 
 // --- Middleware для проверки бана ---
 bot.use(async (ctx, next) => {
@@ -49,11 +60,12 @@ bot.use(async (ctx, next) => {
 
 // --- Импорты обработчиков ---
 import { startHandler } from './handlers/start';
-import { profileHandler, toggleNotifications } from './handlers/profile';
+import { profileHandler } from './handlers/profile';
+import { instructionHandler } from './handlers/instruction';
 import { adminCheckSubscriptionsHandler, adminCloseTicketHandler, enablePromoCommand, disablePromoCommand, banCommand, unbanCommand } from './handlers/admin';
 import { supportHandler, closeTicketHandler, handleTicketMessage } from './handlers/support';
 import { handleSupportGroupMessage } from './handlers/supportGroup';
-import { showAvailableBuilds, showBuildVersions, sendBuildFile } from './handlers/download';
+
 import { 
   showAdminPanel, showAgentsMenu, showStatsMenu, showTicketsMenu, requestAgentId, showAgentsList, 
   showGeneralStats, deleteAllTickets, confirmDeleteTickets, resetTicketCounter, confirmResetCounter, 
@@ -73,18 +85,22 @@ import {
 } from './handlers/promo';
 import { handleAgentIdInput } from './handlers/adminAgentInput';
 import { toggleGlobalPromoCommand } from './handlers/admin';
+import { handleShareAccess, handleShareAdd, handleShareUserInput, handleShareRevoke } from './handlers/sharing';
+import { validateSharedAccess } from '../modules/lifecycle/sharing';
 
 import { 
   requestUserQuery, 
   findAndShowUserCard,
-  requestAccessDays,
-  handleAccessDaysInput,
+  requestExtraAccessDays,
+  handleExtraAccessDaysInput,
   toggleBan,
   toggleFreeze,
-  toggleLegacy
+  handleLiveCheck,
 } from './handlers/userManagement';
 import { PromoSystem } from '../modules/promo';
 import { startPasswordFlow, handlePasswordInput } from './handlers/password';
+import { startCronJobs } from '../services/cron';
+import { setupChannelGuard } from '../modules/lifecycle/channelGuard';
 
 // --- Регистрация команд ---
 bot.command('start', startHandler);
@@ -95,14 +111,20 @@ bot.command('checksubs', adminCheckSubscriptionsHandler);
 bot.command('close', adminCloseTicketHandler);
 bot.command('promo_on', (ctx) => toggleGlobalPromoCommand(ctx));
 bot.command('promo_off', (ctx) => toggleGlobalPromoCommand(ctx));
+import { promoCodeHandler } from './handlers/promoCodeHandler';
+bot.command('promo', promoCodeHandler);
+import { getPrivateChannelLink } from './handlers/privateChannel';
+bot.command('private', getPrivateChannelLink);
+bot.hears('🔒 Закрытый канал', getPrivateChannelLink);
+bot.action('get_private_link_btn', getPrivateChannelLink);
 
 // --- Регистрация кнопок (hears) ---
 bot.hears('👤 Профиль', profileHandler);
 bot.hears('🆘 Поддержка', supportHandler);
 bot.hears('❌ Закрыть тикет', closeTicketHandler);
-bot.hears('🎁 Акция', promoHandler);
+// bot.hears('🎁 Акция', promoHandler); // Скрыто по просьбе
 bot.hears('⚙️ Админ-панель', showAdminPanel);
-bot.hears('📥 Скачать', showAvailableBuilds);
+bot.hears('📖 Инструкция', instructionHandler);
 bot.hears('✈️ Канал', (ctx) => {
   ctx.reply('Нажмите на кнопку, чтобы перейти в наш канал:', {
     reply_markup: {
@@ -148,7 +170,6 @@ bot.action('general_stats_week', (ctx) => showGeneralStatsForPeriod(ctx, 'week')
 bot.action('general_stats_month', (ctx) => showGeneralStatsForPeriod(ctx, 'month'));
 bot.action('general_stats_all', (ctx) => showGeneralStatsForPeriod(ctx, 'all'));
 bot.action('general_stats_custom', requestCustomPeriod);
-bot.action(/^toggle_notify_(\d+)$/, toggleNotifications);
 bot.action('admin_back', showAdminPanel);
 bot.action('admin_agents', showAgentsMenu);
 bot.action('admin_tickets', showTicketsMenu);
@@ -200,17 +221,23 @@ bot.action(/promo_back_(\d+)/, handlePromoBack);
 bot.action(/user_refresh_(\d+)/, findAndShowUserCard);
 bot.action(/user_toggle_ban_(\d+)/, toggleBan);
 bot.action(/user_toggle_freeze_(\d+)/, toggleFreeze);
-bot.action(/user_toggle_legacy_(\d+)/, toggleLegacy);
-bot.action(/user_edit_access_(\d+)_(.+)/, requestAccessDays);
+bot.action(/user_edit_extra_(\d+)/, requestExtraAccessDays);
+bot.action(/user_live_check_(\d+)/, handleLiveCheck);
 
-bot.action('back_to_builds', (ctx) => showAvailableBuilds(ctx)); 
-bot.action(/build_select_(.+)/, showBuildVersions); 
-bot.action(/version_select_(\d+)/, sendBuildFile); 
+// ШЕРИНГ ДОСТУПА
+bot.action('share_access', handleShareAccess);
+bot.action(/share_add_(\d+)/, handleShareAdd);
+bot.action(/share_revoke_(\d+)/, handleShareRevoke);
+bot.action('profile_back', profileHandler);
+
+
+// bot.action('back_to_builds', (ctx) => showAvailableBuilds(ctx)); 
+// bot.action(/build_select_(.+)/, showBuildVersions); 
+// bot.action(/version_select_(\d+)/, sendBuildFile); 
 bot.action('set_password', startPasswordFlow); 
 
 // --- ОБРАБОТЧИКИ СООБЩЕНИЙ ---
 
-// Добавляем универсальный обработчик для ВСЕХ типов сообщений:
 bot.on('message', async (ctx, next) => {
   // Пропускаем команды
   if (ctx.message && 'text' in ctx.message && ctx.message.text.startsWith('/')) {
@@ -224,11 +251,12 @@ bot.on('message', async (ctx, next) => {
 
   // Для личных сообщений - проверяем состояния сессии
   if (ctx.session?.awaitingUserSearch) return findAndShowUserCard(ctx);
-  if (ctx.session?.awaitingAccessDays) return handleAccessDaysInput(ctx);
+  if (ctx.session?.awaitingExtraAccessDays) return handleExtraAccessDaysInput(ctx);
+  // Исправление: awaitingShareUser добавлен в session
+  if (ctx.session?.awaitingShareUser) return handleShareUserInput(ctx);
   if (ctx.session?.awaitingPromoCustomDays) return handlePromoCustomDurationInput(ctx);
   if (ctx.session?.awaitingBuildFile) return handleBuildUploadInput(ctx);
   if (ctx.session?.awaitingAgentAction || ctx.session?.awaitingAdminSetting) return handleAgentIdInput(ctx);
-  if (ctx.session?.awaitingCustomStatsPeriod) return handleCustomPeriodInput(ctx);
   if (ctx.session?.awaitingCustomStatsPeriod) return handleCustomPeriodInput(ctx);
   if (ctx.session?.awaitingPromoDonation) return PromoSystem.handleDonationInput(ctx);
   if ((ctx.session as any)?.awaitingPassword) return handlePasswordInput(ctx);
@@ -245,11 +273,28 @@ bot.on('message', async (ctx, next) => {
 // --- Запуск и остановка бота ---
 export const startBot = async () => {
   try {
+    // Запускаем CRON задачи
+    startCronJobs(bot);
+
+    // Запускаем защиту канала (отзыв инвайтов)
+    setupChannelGuard(bot);
+
+    // Запускаем проверку шаринга при старте один раз
+    validateSharedAccess().catch(err => console.error('Initial sharing validation failed:', err));
+
     console.log('🤖 Starting Telegram bot...');
-    await bot.launch();
+    await bot.launch({
+      allowedUpdates: [
+        'message', 
+        'callback_query', 
+        'chat_member',     // REQUIRED for Channel Guard (joins/leaves)
+        'my_chat_member',  // Bot status changes
+        'channel_post'     // Optional, for channel messages
+      ]
+    });
     console.log('✅ Bot started successfully');
     console.log(`📱 Bot username: @${bot.botInfo?.username}`);
-    console.log('🎮 Ready to accept commands!');
+
   } catch (error) {
     console.error('❌ Failed to start bot:', error);
     // УБРАН process.exit(1)

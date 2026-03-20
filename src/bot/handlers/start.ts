@@ -52,13 +52,27 @@ export const startHandler = async (ctx: BotContext) => {
           ? result.expiresAt.toLocaleDateString('ru-RU')
           : 'неизвестна';
 
-        await ctx.reply(
-          `✅ Добро пожаловать в Fragment! 🎮\n\n` +
-          `Ваша подписка активна.\n` +
-          `📊 Уровень: ${levelName}\n` +
-          `📅 Действует до: ${expiryDate}`,
-          mainKeyboard(updatedUser, userIsAdmin)
-        );
+        if (updatedUser.status === 'shared') {
+             await ctx.reply(
+              `🎁 Добро пожаловать в Fragment! 🎮\n\n` +
+              `Вам подарили доступ.\n` +
+              `📊 Уровень: ${levelName}\n` +
+              `📅 Действует до: ${expiryDate}`,
+              mainKeyboard(updatedUser, userIsAdmin)
+            );
+        } else {
+            let msg = `✅ Добро пожаловать в Fragment! 🎮\n\n` +
+              `Ваша подписка активна.\n` +
+              `📊 Уровень: ${levelName}\n` +
+              `📅 Действует до: ${expiryDate}`;
+            
+            if (result.level === SUBSCRIPTION_NAMES.legend || result.level === 'legend' || 
+                result.level === SUBSCRIPTION_NAMES.spark || result.level === 'spark') {
+                msg += `\n\n🔒 Закрытый канал: /private`;
+            }
+
+            await ctx.reply(msg, mainKeyboard(updatedUser, userIsAdmin));
+        }
 
         // Напоминание про пароль для новых пользователей
         if (!updatedUser.passwordHash) {
@@ -138,7 +152,7 @@ export const startHandler = async (ctx: BotContext) => {
             `2. Вступить в одну из закрытых групп\n` +
             `3. Нажать /start для активации\n\n` +
             `❓ Если у вас есть подписка, но доступ не активируется:\n` +
-            `Примите приглашение у бота @boosty_to_bot${promoText}`,
+            `Примите приглашение у бота @boosty\\_to\\_bot${promoText}`,
             {
               parse_mode: 'Markdown',
               ...mainKeyboard(updatedUser, userIsAdmin)

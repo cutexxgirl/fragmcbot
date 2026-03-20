@@ -165,12 +165,7 @@ ${escapedMessage}
 
     const keyboard = Markup.inlineKeyboard([
       [Markup.button.callback('🎮 Fragment', `promo_select_${requestId}_fragment`)],
-      [Markup.button.callback('⭐ Legacy', `promo_select_${requestId}_legacy`)],
-      [
-        Markup.button.callback('🔵 Pulse', `promo_select_${requestId}_pulse`),
-        Markup.button.callback('🟢 Gear&Wire', `promo_select_${requestId}_gearwire`),
-      ],
-      [Markup.button.callback('🟡 Ouch', `promo_select_${requestId}_ouch`)],
+      [Markup.button.callback('📦 Доп. сборки', `promo_select_${requestId}_extra`)],
       [Markup.button.callback('✅ ПОДТВЕРДИТЬ', `promo_confirm_${requestId}`)],
       [Markup.button.callback('🗑️ Очистить', `promo_clear_${requestId}`)],
       [Markup.button.callback('❌ Отмена', `promo_reject_${requestId}`)],
@@ -352,24 +347,14 @@ ${escapedMessage}
           console.log(`[Promo] Granted Fragment access to ${request.userId} for ${days} days`);
           break;
 
-        case 'legacy':
-          await SubscriptionManager.grantLegacy(request.userId);
-          console.log(`[Promo] Granted Legacy to ${request.userId}`);
-          break;
-
-        case 'pulse':
-          await SubscriptionManager.grantAdditionalBuild(request.userId, 'pulse', days);
-          console.log(`[Promo] Granted Pulse to ${request.userId} for ${days} days`);
-          break;
-
-        case 'gearwire':
-          await SubscriptionManager.grantAdditionalBuild(request.userId, 'gearwire', days);
-          console.log(`[Promo] Granted Gearwire to ${request.userId} for ${days} days`);
-          break;
-
-        case 'ouch':
-          await SubscriptionManager.grantAdditionalBuild(request.userId, 'ouch', days);
-          console.log(`[Promo] Granted Ouch to ${request.userId} for ${days} days`);
+        case 'extra':
+          // Доп. сборки через expiresAtExtra
+          const extraExpiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+          await prisma.user.update({
+            where: { telegramId: request.userId },
+            data: { expiresAtExtra: extraExpiresAt },
+          });
+          console.log(`[Promo] Granted extra builds access to ${request.userId} for ${days} days`);
           break;
       }
     }

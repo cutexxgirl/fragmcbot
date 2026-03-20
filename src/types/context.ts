@@ -43,10 +43,9 @@ export interface SessionData {
   };
 
   awaitingUserSearch?: boolean;
-  awaitingAccessDays?: { 
-    userId: bigint;
-    buildCodeName: string;
-  };
+  awaitingShareUser?: boolean;
+
+  awaitingExtraAccessDays?: bigint;
   
   lastDiscordRequest?: number;
   awaitingPassword?: boolean;

@@ -36,9 +36,12 @@ export async function syncUserStatus(userId: bigint): Promise<SyncResult> {
       
       const isPromoEnabled = adminSettings?.isPromoEnabled || false;
       
+      const { generateFragmentId } = await import('../../utils/fragmentId');
+      
       user = await prisma.user.create({
         data: {
           telegramId: userId,
+          fragmentId: await generateFragmentId(),
           accessToken: generateToken(),
           status: UserStatus.INACTIVE,
           hasPromoAccess: isPromoEnabled,
@@ -55,6 +58,22 @@ export async function syncUserStatus(userId: bigint): Promise<SyncResult> {
         status: 'BANNED',
         message: `Вы заблокированы. Причина: ${user.banReason || 'Нарушение правил'}`
       };
+    }
+
+    // 2.5 Гарантируем наличие Fragment ID (Ленивая миграция)
+    if (!user.fragmentId) {
+        const { generateFragmentId } = await import('../../utils/fragmentId');
+        let newFid = await generateFragmentId();
+        
+        // Простая защита от коллизий (одна попытка, можно улучшить циклом)
+        const exists = await prisma.user.findUnique({ where: { fragmentId: newFid } });
+        if (exists) newFid = await generateFragmentId();
+
+        user = await prisma.user.update({
+            where: { telegramId: userId },
+            data: { fragmentId: newFid }
+        });
+        console.log(`[Lifecycle] Generated new FID for ${userId}: ${newFid}`);
     }
 
     // 3. Получаем источники правды
@@ -100,26 +119,12 @@ export async function syncUserStatus(userId: bigint): Promise<SyncResult> {
           needsUpdate = true;
         }
         
-        // НОВАЯ ЛОГИКА: Проверяем Legacy статус для Легенды
-        if (membershipInfo.level === 'legend') {
-          // Если у пользователя Легенда, но Legacy статус не установлен правильно
-          if (!user.isLegacy || 
-              user.expiresAtPulse?.getTime() !== user.expiresAtFragment.getTime() ||
-              user.expiresAtGearwire?.getTime() !== user.expiresAtFragment.getTime() ||
-              user.expiresAtOuch?.getTime() !== user.expiresAtFragment.getTime()) {
-            
-            console.log(`[Lifecycle] User ${userId} has Legend but Legacy status needs sync`);
-            updateData.isLegacy = true;
-            updateData.expiresAtPulse = user.expiresAtFragment;
-            updateData.expiresAtGearwire = user.expiresAtFragment;
-            updateData.expiresAtOuch = user.expiresAtFragment;
-            needsUpdate = true;
-          }
-        } else {
-          // Для других уровней убираем Legacy, если он есть
-          if (user.isLegacy) {
-            console.log(`[Lifecycle] User ${userId} has ${membershipInfo.level} but Legacy status is true - removing`);
-            updateData.isLegacy = false;
+        // Проверяем expiresAtExtra для Legend/Spark
+        if (membershipInfo.level === 'legend' || membershipInfo.level === 'spark') {
+          // Синхронизируем expiresAtExtra с основной подпиской
+          if (user.expiresAtExtra?.getTime() !== user.expiresAtFragment.getTime()) {
+            console.log(`[Lifecycle] User ${userId} has ${membershipInfo.level} - syncing expiresAtExtra`);
+            updateData.expiresAtExtra = user.expiresAtFragment;
             needsUpdate = true;
           }
         }
@@ -171,23 +176,10 @@ export async function syncUserStatus(userId: bigint): Promise<SyncResult> {
         ...(isRenewal && { lastRenewedAt: new Date() })
       };
 
-      // НОВАЯ ЛОГИКА: Легенда = Легаси
-      if (membershipInfo.level === 'legend') {
-        console.log(`[Lifecycle] User ${userId} has Legend subscription - granting Legacy status`);
-        updateData = {
-          ...updateData,
-          isLegacy: true,
-          expiresAtPulse: newExpiresAt,
-          expiresAtGearwire: newExpiresAt,
-          expiresAtOuch: newExpiresAt
-        };
-      } else {
-        // Для других уровней (adept, novice) убираем Legacy статус
-        console.log(`[Lifecycle] User ${userId} has ${membershipInfo.level} subscription - removing Legacy status`);
-        updateData = {
-          ...updateData,
-          isLegacy: false
-        };
+      // Legend и Spark получают доступ к доп. сборкам
+      if (membershipInfo.level === 'legend' || membershipInfo.level === 'spark') {
+        console.log(`[Lifecycle] User ${userId} has ${membershipInfo.level} - granting extra builds access`);
+        updateData.expiresAtExtra = newExpiresAt;
       }
 
       // Обновляем пользователя
@@ -216,6 +208,23 @@ export async function syncUserStatus(userId: bigint): Promise<SyncResult> {
         }
       });
 
+      // KICK FROM PRIVATE CHANNEL IF DOWNGRADED
+      // Если уровень больше не Legend/Spark, то кикаем из закрытого канала
+      if (membershipInfo.level !== 'legend' && membershipInfo.level !== 'spark') {
+           const closedChannelId = config.channel.closed;
+           if (closedChannelId && closedChannelId !== BigInt(0)) {
+               try {
+                   // Пробуем кикнуть (бан+разбан). Если юзера нет в чате, может упасть ошибка, игнорируем
+                   // Fire-and-forget для скорости
+                   ctx.telegram.banChatMember(closedChannelId.toString(), Number(userId))
+                       .then(() => ctx.telegram.unbanChatMember(closedChannelId.toString(), Number(userId)))
+                       .catch(() => {}); // Игнорируем ошибки (юзера нет в чате и т.д.)
+               } catch (e) {
+                   // Sync check error
+               }
+           }
+      }
+
       return {
         status: 'BOOSTY_ACTIVE',
         level: membershipInfo.level,
@@ -223,18 +232,19 @@ export async function syncUserStatus(userId: bigint): Promise<SyncResult> {
       };
     }
 
-    // СЦЕНАРИЙ 2: Нет Boosty, но есть акционная задача
-    if (activePromoTask) {
-      console.log(`[Lifecycle] User ${userId} has promo access until ${activePromoTask.scheduledFor}`);
+    // СЦЕНАРИЙ 2: Нет Boosty, но есть акционная задача ИЛИ флаг промо-доступа
+    if (activePromoTask || (user.hasPromoAccess && user.expiresAtFragment && user.expiresAtFragment > now)) {
+      const expiryDate = activePromoTask ? activePromoTask.scheduledFor : user.expiresAtFragment!;
+      console.log(`[Lifecycle] User ${userId} has promo access until ${expiryDate}`);
       
       // Проверка на "косметическое" обновление
       if (user.status === UserStatus.ACTIVE && 
-          user.expiresAtFragment?.getTime() === activePromoTask.scheduledFor.getTime()) {
+          user.expiresAtFragment?.getTime() === expiryDate.getTime()) {
         console.log(`[Lifecycle] No update needed for promo user ${userId}`);
         return {
           status: 'PROMO_ACTIVE',
-          level: SubscriptionLevel.NOVICE,
-          expiresAt: activePromoTask.scheduledFor
+          level: user.subscriptionLevel as SubscriptionLevel || SubscriptionLevel.NOVICE,
+          expiresAt: expiryDate
         };
       }
 
@@ -244,17 +254,73 @@ export async function syncUserStatus(userId: bigint): Promise<SyncResult> {
         data: {
           status: UserStatus.ACTIVE,
           isFrozen: false,
-          subscriptionLevel: SubscriptionLevel.NOVICE,
-          expiresAtFragment: activePromoTask.scheduledFor,
-          isLegacy: false
+          // subscriptionLevel не меняем, он уже установлен при активации
+          expiresAtFragment: expiryDate
         }
       });
 
       return {
         status: 'PROMO_ACTIVE',
-        level: SubscriptionLevel.NOVICE,
-        expiresAt: activePromoTask.scheduledFor
+        level: user.subscriptionLevel as SubscriptionLevel || SubscriptionLevel.NOVICE,
+        expiresAt: expiryDate
       };
+    }
+
+    // СЦЕНАРИЙ 2.5: Подаренный доступ (Shared)
+    // Проверяем, есть ли активная запись в SharedAccess
+    const sharedAccess = await prisma.sharedAccess.findFirst({
+        where: {
+            guestId: userId,
+            expiresAt: { gt: now }
+        },
+        include: { owner: true }
+    });
+
+    if (sharedAccess) {
+         console.log(`[Lifecycle] User ${userId} has shared access from ${sharedAccess.ownerId}`);
+         
+         const ownerLevel = sharedAccess.owner.subscriptionLevel;
+         // Уровень доступа гостя зависит от владельца
+         // Legend дает доступ, но сам гость считается Novice (в плане прав дарения), 
+         // хотя получает доступ к лаунчеру.
+         // Но судя по profile.ts, мы просто ставим статус SHARED.
+         
+         // Проверка на "косметическое" обновление
+         if (user.status === UserStatus.SHARED && 
+             user.expiresAtFragment?.getTime() === sharedAccess.expiresAt.getTime()) {
+             console.log(`[Lifecycle] No update needed for shared user ${userId}`);
+             return {
+                 status: 'BOOSTY_ACTIVE', // Используем 'BOOSTY_ACTIVE' для корректного отображения в start.ts или добавим новый кейс
+                 level: SubscriptionLevel.NOVICE, // Гость получает базовый доступ
+                 expiresAt: sharedAccess.expiresAt
+             };
+         }
+         
+         const isRenewal = user.status === UserStatus.EXPIRED || user.status === UserStatus.INACTIVE || user.status === UserStatus.SHARED;
+         
+         await prisma.user.update({
+             where: { telegramId: userId },
+             data: {
+                 status: UserStatus.SHARED,
+                 isFrozen: false,
+                 subscriptionLevel: SubscriptionLevel.NOVICE, // Уровень прав в боте (не путать с уровнем доступа к файлам)
+                 expiresAtFragment: sharedAccess.expiresAt,
+                 expiresAtExtra: sharedAccess.expiresAt, // Даем доступ и к доп сборкам, так как дарят Legend/Spark
+                 giftedById: sharedAccess.ownerId,
+                 hasPromoAccess: false
+             }
+         });
+         
+         // Лог
+         if (isRenewal && user.status !== UserStatus.SHARED) {
+             await logEvent('new_subscription', userId, { type: 'shared', from: sharedAccess.ownerId.toString() });
+         }
+
+         return {
+             status: 'BOOSTY_ACTIVE', // Возвращаем как активный, чтобы startHandler показал меню
+             level: SubscriptionLevel.NOVICE,
+             expiresAt: sharedAccess.expiresAt
+         };
     }
 
     // СЦЕНАРИЙ 3: Нет ни подписки Boosty, ни акции
@@ -273,8 +339,7 @@ export async function syncUserStatus(userId: bigint): Promise<SyncResult> {
     // Если статус был ACTIVE
     if (user.status === UserStatus.ACTIVE) {
       let updateData: any = { 
-        subscriptionLevel: null,
-        isLegacy: false
+        subscriptionLevel: null
       };
 
       if (user.expiresAtFragment && user.expiresAtFragment > now) {
@@ -285,6 +350,21 @@ export async function syncUserStatus(userId: bigint): Promise<SyncResult> {
         // Сценарий "Истек" - срок подписки прошел
         console.log(`[Lifecycle] User ${userId} subscription expired`);
         updateData.status = UserStatus.EXPIRED;
+      }
+      
+      // KICK FROM PRIVATE CHANNEL IF NEEDED
+      // Сценарий "Истек" или "Нет доступа" - кикаем из закрытого канала
+      if (updateData.status && (updateData.status === UserStatus.EXPIRED || updateData.status === UserStatus.INACTIVE)) {
+           try {
+               const closedChannelId = config.channel.closed;
+               if (closedChannelId !== BigInt(0)) {
+                   await ctx.telegram.banChatMember(closedChannelId.toString(), Number(userId));
+                   await ctx.telegram.unbanChatMember(closedChannelId.toString(), Number(userId)); // Сразу разбан, чтобы мог зайти потом
+                   console.log(`[Lifecycle] Kicked user ${userId} from private channel`);
+               }
+           } catch (e) {
+               console.error(`[Lifecycle] Failed to kick user ${userId} from private channel:`, e);
+           }
       }
 
       await prisma.user.update({

@@ -102,10 +102,7 @@ export class BuildManager {
         select: {
           telegramId: true,
           expiresAtFragment: true,
-          expiresAtPulse: true,
-          expiresAtGearwire: true,
-          expiresAtOuch: true,
-          isLegacy: true,
+          expiresAtExtra: true,
         },
       });
 
@@ -116,19 +113,12 @@ export class BuildManager {
         try {
           let hasAccess = false;
 
-          switch (buildCodeName) {
-            case 'fragment':
-              hasAccess = !!(user.expiresAtFragment && user.expiresAtFragment > now);
-              break;
-            case 'pulse':
-              hasAccess = user.isLegacy || !!(user.expiresAtPulse && user.expiresAtPulse > now);
-              break;
-            case 'gearwire':
-              hasAccess = user.isLegacy || !!(user.expiresAtGearwire && user.expiresAtGearwire > now);
-              break;
-            case 'ouch':
-              hasAccess = user.isLegacy || !!(user.expiresAtOuch && user.expiresAtOuch > now);
-              break;
+          // fragment - основная сборка, остальные - через expiresAtExtra
+          if (buildCodeName === 'fragment') {
+            hasAccess = !!(user.expiresAtFragment && user.expiresAtFragment > now);
+          } else {
+            // Все доп. сборки проверяются через expiresAtExtra
+            hasAccess = !!(user.expiresAtExtra && user.expiresAtExtra > now);
           }
 
           if (!hasAccess) continue;

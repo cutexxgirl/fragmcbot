@@ -17,11 +17,13 @@ export const config = {
     novice: BigInt(process.env.GROUP_NOVICE_ID!),
     adept: BigInt(process.env.GROUP_ADEPT_ID!),
     legend: BigInt(process.env.GROUP_LEGEND_ID!),
+    spark: BigInt(process.env.GROUP_SPARK_ID!),
     support: BigInt(process.env.SUPPORT_GROUP_ID!),
     promo: BigInt(process.env.GROUP_PROMO_ID!),
   },
   channel: {
     main: BigInt(process.env.CHANNEL!), // @fragmcru
+    closed: BigInt(process.env.CLOSED_CHANNEL_ID || '0'),
   },
   environment: process.env.NODE_ENV || 'development',
 };
@@ -30,18 +32,21 @@ export enum SubscriptionLevel {
   NOVICE = 'novice',
   ADEPT = 'adept',
   LEGEND = 'legend',
+  SPARK = 'spark',
 }
 
 export const SUBSCRIPTION_NAMES: Record<SubscriptionLevel, string> = {
   [SubscriptionLevel.NOVICE]: 'Новичок',
   [SubscriptionLevel.ADEPT]: 'Адепт',
   [SubscriptionLevel.LEGEND]: 'Легенда',
+  [SubscriptionLevel.SPARK]: 'Искра',
 };
 
 export enum UserStatus {
   ACTIVE = 'active',
   EXPIRED = 'expired',
   INACTIVE = 'inactive',
+  SHARED = 'shared',
 }
 
 export enum TicketStatus {
