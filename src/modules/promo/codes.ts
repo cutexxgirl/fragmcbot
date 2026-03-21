@@ -17,6 +17,19 @@ type PromoCooldownUser = {
 const hasErrorCode = (error: unknown, code: string) =>
   typeof error === 'object' && error !== null && 'code' in error && (error as { code?: string }).code === code;
 
+const promoFailure = (message: string, countAsFailedAttempt = false): PromoActivationResult => ({
+  success: false,
+  message,
+  countAsFailedAttempt
+});
+
+const promoSuccess = (code: string, grantDays: number, level: string): PromoActivationResult => ({
+  success: true,
+  code,
+  grantDays,
+  level
+});
+
 export async function checkPromoCooldown(user: PromoCooldownUser): Promise<{ allowed: boolean; waitTimeMs?: number }> {
   if (!user.lastPromoAttemptAt) return { allowed: true };
 
@@ -107,19 +120,11 @@ export async function activatePromoCode(
       });
 
       if (!promo || !promo.isActive) {
-        return {
-          success: false,
-          message: 'Промокод не найден или неактивен.',
-          countAsFailedAttempt: true
-        };
+        return promoFailure('Промокод не найден или неактивен.', true);
       }
 
       if (promo.validUntil && promo.validUntil < new Date()) {
-        return {
-          success: false,
-          message: 'Срок действия промокода истек.',
-          countAsFailedAttempt: true
-        };
+        return promoFailure('Срок действия промокода истек.', true);
       }
 
       const existingActivation = await tx.promoActivation.findUnique({
@@ -132,16 +137,12 @@ export async function activatePromoCode(
       });
 
       if (existingActivation) {
-        return {
-          success: false,
-          message: 'Вы уже активировали этот промокод.',
-          countAsFailedAttempt: true
-        };
+        return promoFailure('Вы уже активировали этот промокод.', true);
       }
 
       const user = await tx.user.findUnique({ where: { telegramId: userId } });
       if (!user) {
-        return { success: false, message: 'User error' };
+        return promoFailure('User error');
       }
 
       const promoUpdateWhere: any = { id: promo.id };
@@ -157,11 +158,7 @@ export async function activatePromoCode(
       });
 
       if (updateResult.count === 0) {
-        return {
-          success: false,
-          message: 'Лимит активаций этого промокода исчерпан.',
-          countAsFailedAttempt: true
-        };
+        return promoFailure('Лимит активаций этого промокода исчерпан.', true);
       }
 
       await tx.promoActivation.create({
@@ -193,12 +190,7 @@ export async function activatePromoCode(
         }
       });
 
-      return {
-        success: true,
-        code: promo.code,
-        grantDays: promo.grantDays,
-        level: newLevel
-      };
+      return promoSuccess(promo.code, promo.grantDays, newLevel);
     });
   } catch (error) {
     if (hasErrorCode(error, 'P2002')) {
