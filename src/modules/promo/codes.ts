@@ -1,199 +1,234 @@
 import { prisma } from '../../database/prisma';
-import { User, PromoCode } from '@prisma/client';
-import { UserStatus, SubscriptionLevel } from '../../config';
+import { SubscriptionLevel, UserStatus, config } from '../../config';
 import { logEvent } from '../statistics/logger';
-import { syncUserStatus } from '../lifecycle';
 
 const BACKOFF_TIMES = [0, 5000, 30000, 5 * 60 * 1000, 60 * 60 * 1000, 24 * 60 * 60 * 1000];
+const LEVELS = ['novice', 'adept', 'legend', 'spark'];
 
-/**
- * Проверка кулдауна на ввод промокода
- */
-export async function checkPromoCooldown(user: User): Promise<{ allowed: boolean; waitTimeMs?: number }> {
-    if (!user.lastPromoAttemptAt) return { allowed: true };
-    
-    const attempt = user.promoAttempts || 0;
-    // Если попыток 0 (значит предыдущая была успешна или сброшена), то кулдаун 0
-    if (attempt === 0) return { allowed: true };
+type PromoActivationResult =
+  | { success: true; code: string; grantDays: number; level: string }
+  | { success: false; message: string; countAsFailedAttempt?: boolean };
 
-    const index = Math.min(attempt, BACKOFF_TIMES.length - 1);
-    const requiredDelay = BACKOFF_TIMES[index]; // ms
-    
-    const passed = Date.now() - user.lastPromoAttemptAt.getTime();
-    
-    if (passed < requiredDelay) {
-        return { allowed: false, waitTimeMs: requiredDelay - passed };
-    }
-    return { allowed: true };
+type PromoCooldownUser = {
+  lastPromoAttemptAt: Date | null;
+  promoAttempts: number | null;
+};
+
+const hasErrorCode = (error: unknown, code: string) =>
+  typeof error === 'object' && error !== null && 'code' in error && (error as { code?: string }).code === code;
+
+export async function checkPromoCooldown(user: PromoCooldownUser): Promise<{ allowed: boolean; waitTimeMs?: number }> {
+  if (!user.lastPromoAttemptAt) return { allowed: true };
+
+  const attempt = user.promoAttempts || 0;
+  if (attempt === 0) return { allowed: true };
+
+  const index = Math.min(attempt, BACKOFF_TIMES.length - 1);
+  const requiredDelay = BACKOFF_TIMES[index];
+  const passed = Date.now() - user.lastPromoAttemptAt.getTime();
+
+  if (passed < requiredDelay) {
+    return { allowed: false, waitTimeMs: requiredDelay - passed };
+  }
+
+  return { allowed: true };
 }
 
-/**
- * Регистрация НЕУДАЧНОЙ попытки (увеличиваем счетчик)
- */
 export async function registerFailedAttempt(userId: bigint) {
-    await prisma.user.update({
-        where: { telegramId: userId },
-        data: {
-            promoAttempts: { increment: 1 },
-            lastPromoAttemptAt: new Date()
-        }
-    });
+  await prisma.user.update({
+    where: { telegramId: userId },
+    data: {
+      promoAttempts: { increment: 1 },
+      lastPromoAttemptAt: new Date()
+    }
+  });
 }
 
-/**
- * Сброс счетчика (при успехе)
- */
 export async function resetPromoAttempts(userId: bigint) {
-    await prisma.user.update({
-        where: { telegramId: userId },
-        data: {
-            promoAttempts: 0,
-            lastPromoAttemptAt: null
-        }
-    });
+  await prisma.user.update({
+    where: { telegramId: userId },
+    data: {
+      promoAttempts: 0,
+      lastPromoAttemptAt: null
+    }
+  });
 }
 
-/**
- * Активация промокода
- */
-import { config } from '../../config';
+const getHigherLevel = (currentLevel: string | null, promoLevel: string) => {
+  if (!currentLevel) return promoLevel;
 
-/**
- * Активация промокода
- */
-export async function activatePromoCode(userId: bigint, codeInput: string, ctx?: any): Promise<{ success: boolean; message: string }> {
-    const code = codeInput.trim();
-    
-    // 1. Ищем код
-    const promo = await prisma.promoCode.findUnique({
+  const currentIndex = LEVELS.indexOf(currentLevel);
+  const promoIndex = LEVELS.indexOf(promoLevel);
+
+  if (currentIndex === -1 || promoIndex === -1) {
+    return promoLevel;
+  }
+
+  return currentIndex > promoIndex ? currentLevel : promoLevel;
+};
+
+const requiresExtraAccess = (level: string) =>
+  level === SubscriptionLevel.LEGEND || level === SubscriptionLevel.SPARK;
+
+export async function activatePromoCode(
+  userId: bigint,
+  codeInput: string,
+  ctx?: any
+): Promise<{ success: boolean; message: string }> {
+  const code = codeInput.trim();
+
+  if (ctx && config.channel.main) {
+    try {
+      const channelId = config.channel.main.toString();
+      const chatMember = await ctx.telegram.getChatMember(channelId, Number(userId));
+      const status = chatMember.status;
+
+      if (status === 'left' || status === 'kicked') {
+        return {
+          success: false,
+          message: `❌ Для активации промокода необходимо быть подписанным на наш канал!\n\n${process.env.CHANNEL_LINK || '@fragmcru'}`
+        };
+      }
+    } catch (error) {
+      console.error('Error checking channel subscription:', error);
+      return {
+        success: false,
+        message: '⚠️ Ошибка при проверке подписки. Убедитесь, что бот является администратором канала, или попробуйте позже.'
+      };
+    }
+  }
+
+  let result: PromoActivationResult;
+
+  try {
+    result = await prisma.$transaction(async (tx: any) => {
+      const promo = await tx.promoCode.findUnique({
         where: { code }
-    });
+      });
 
-    if (!promo || !promo.isActive) {
-        await registerFailedAttempt(userId);
-        return { success: false, message: 'Промокод не найден или неактивен.' };
-    }
+      if (!promo || !promo.isActive) {
+        return {
+          success: false,
+          message: 'Промокод не найден или неактивен.',
+          countAsFailedAttempt: true
+        };
+      }
 
-    // 2. Проверяем валидность кода (срок, кол-во)
-    if (promo.validUntil && promo.validUntil < new Date()) {
-        await registerFailedAttempt(userId);
-        return { success: false, message: 'Срок действия промокода истек.' };
-    }
-    
-    if (promo.maxActivations !== -1 && promo.activationsCount >= promo.maxActivations) {
-        await registerFailedAttempt(userId);
-        return { success: false, message: 'Лимит активаций этого промокода исчерпан.' };
-    }
+      if (promo.validUntil && promo.validUntil < new Date()) {
+        return {
+          success: false,
+          message: 'Срок действия промокода истек.',
+          countAsFailedAttempt: true
+        };
+      }
 
-    // 2.5 Проверка подписки на канал (если передан контекст)
-    // 2.5 Проверка подписки на канал (если передан контекст)
-    if (ctx && config.channel.main) {
-        try {
-            const channelId = config.channel.main.toString();
-            // Handle negative IDs standard
-            const chatMember = await ctx.telegram.getChatMember(channelId, Number(userId));
-            const status = chatMember.status;
-            
-            // Allow: creator, administrator, member. (restricted? maybe)
-            // Block: left, kicked.
-            if (status === 'left' || status === 'kicked') {
-                return { 
-                    success: false, 
-                    message: `❌ Для активации промокода необходимо быть подписанным на наш канал!\n\n${process.env.CHANNEL_LINK || '@fragmcru'}` 
-                };
-            }
-        } catch (error) {
-            console.error('Error checking channel subscription:', error);
-            // STRICT MODE: Если не удалось проверить (например, бот не админ), лучше отказать и попросить админа проверить.
-            // Иначе дыра в безопасности.
-            return {
-                success: false,
-                message: '⚠️ Ошибка при проверке подписки. Убедитесь, что бот является администратором канала, или попробуйте позже.'
-            };
-        }
-    }
-
-    // 3. Проверяем, активировал ли уже этот юзер
-    const activation = await prisma.promoActivation.findUnique({
+      const existingActivation = await tx.promoActivation.findUnique({
         where: {
-            userId_promoId: {
-                userId,
-                promoId: promo.id
-            }
-        }
-    });
-
-    if (activation) {
-         // Тут спорно: считать ли повторную активацию за ошибку? Да, чтобы не спамили.
-        await registerFailedAttempt(userId);
-        return { success: false, message: 'Вы уже активировали этот промокод.' };
-    }
-
-    // 4. АКТИВАЦИЯ
-    
-    // Обновляем статистику промокода
-    await prisma.promoCode.update({
-        where: { id: promo.id },
-        data: { activationsCount: { increment: 1 } }
-    });
-
-    // Создаем запись об активации
-    await prisma.promoActivation.create({
-        data: {
+          userId_promoId: {
             userId,
             promoId: promo.id
+          }
         }
-    });
-    
-    // Выдаем награду Юзеру
-    const user = await prisma.user.findUnique({ where: { telegramId: userId } });
-    if (!user) return { success: false, message: 'User error' };
+      });
 
-    // Рассчитываем новую дату
-    let newExpiresAt = user.expiresAtFragment && user.expiresAtFragment > new Date() 
-        ? user.expiresAtFragment 
-        : new Date();
-        
-    // Добавляем дни
-    newExpiresAt.setDate(newExpiresAt.getDate() + promo.grantDays);
-    
-    // Определяем уровень (если у юзера уже выше, не понижаем)
-    let newLevel = promo.grantLevel;
-    // Простая логика приоритетов: Spark > Legend > Adept > Novice
-    const levels = ['novice', 'adept', 'legend', 'spark'];
-    if (user.subscriptionLevel && levels.indexOf(user.subscriptionLevel) > levels.indexOf(newLevel)) {
-        newLevel = user.subscriptionLevel;
-    }
+      if (existingActivation) {
+        return {
+          success: false,
+          message: 'Вы уже активировали этот промокод.',
+          countAsFailedAttempt: true
+        };
+      }
 
-    // Обновляем юзера
-    await prisma.user.update({
+      const user = await tx.user.findUnique({ where: { telegramId: userId } });
+      if (!user) {
+        return { success: false, message: 'User error' };
+      }
+
+      const promoUpdateWhere: any = { id: promo.id };
+      if (promo.maxActivations !== -1) {
+        promoUpdateWhere.activationsCount = { lt: promo.maxActivations };
+      }
+
+      const updateResult = await tx.promoCode.updateMany({
+        where: promoUpdateWhere,
+        data: {
+          activationsCount: { increment: 1 }
+        }
+      });
+
+      if (updateResult.count === 0) {
+        return {
+          success: false,
+          message: 'Лимит активаций этого промокода исчерпан.',
+          countAsFailedAttempt: true
+        };
+      }
+
+      await tx.promoActivation.create({
+        data: {
+          userId,
+          promoId: promo.id
+        }
+      });
+
+      const now = new Date();
+      const newExpiresAt =
+        user.expiresAtFragment && user.expiresAtFragment > now
+          ? new Date(user.expiresAtFragment)
+          : new Date(now);
+      newExpiresAt.setDate(newExpiresAt.getDate() + promo.grantDays);
+
+      const newLevel = getHigherLevel(user.subscriptionLevel, promo.grantLevel);
+
+      await tx.user.update({
         where: { telegramId: userId },
         data: {
-            status: UserStatus.ACTIVE,
-            subscriptionLevel: newLevel,
-            expiresAtFragment: newExpiresAt,
-            hasPromoAccess: true, // Mark as Promo user to prevent auto-freeze
-            // Сбрасываем счетчик ошибок
-            promoAttempts: 0,
-            lastPromoAttemptAt: null
+          status: UserStatus.ACTIVE,
+          subscriptionLevel: newLevel,
+          expiresAtFragment: newExpiresAt,
+          expiresAtExtra: requiresExtraAccess(newLevel) ? newExpiresAt : user.expiresAtExtra,
+          hasPromoAccess: true,
+          promoAttempts: 0,
+          lastPromoAttemptAt: null
         }
+      });
+
+      return {
+        success: true,
+        code: promo.code,
+        grantDays: promo.grantDays,
+        level: newLevel
+      };
     });
-    
-    // Даем доп доступ если уровень позволяет
-    if (newLevel === SubscriptionLevel.LEGEND || newLevel === SubscriptionLevel.SPARK) {
-         await prisma.user.update({
-            where: { telegramId: userId },
-            data: { expiresAtExtra: newExpiresAt }
-        });
+  } catch (error) {
+    if (hasErrorCode(error, 'P2002')) {
+      await registerFailedAttempt(userId);
+      return { success: false, message: 'Вы уже активировали этот промокод.' };
     }
 
-    await logEvent('promo_code_activation', userId, { code: promo.code, grantDays: promo.grantDays });
-    
-    let successMsg = `✅ Промокод активирован!\nВам выдана подписка уровня ${newLevel} на ${promo.grantDays} дней.\n\n🔄 Напишите /start для обновления меню.`;
-    
-    if (newLevel === SubscriptionLevel.LEGEND || newLevel === SubscriptionLevel.SPARK) {
-        successMsg += `\n\n🔒 Доступ к закрытому каналу: /private`;
-    }
+    throw error;
+  }
 
-    return { success: true, message: successMsg };
+  if (!result.success) {
+    if (result.countAsFailedAttempt) {
+      await registerFailedAttempt(userId);
+    }
+    return { success: false, message: result.message };
+  }
+
+  await logEvent('promo_code_activation', userId, {
+    code: result.code,
+    grantDays: result.grantDays
+  });
+
+  let successMsg =
+    `✅ Промокод активирован!\n` +
+    `Вам выдана подписка уровня ${result.level} на ${result.grantDays} дней.\n\n` +
+    `🔄 Напишите /start для обновления меню.`;
+
+  if (requiresExtraAccess(result.level)) {
+    successMsg += `\n\n🔒 Доступ к закрытому каналу: /private`;
+  }
+
+  return { success: true, message: successMsg };
 }

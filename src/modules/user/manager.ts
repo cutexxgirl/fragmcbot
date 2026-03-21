@@ -1,7 +1,7 @@
 import { prisma } from '../../database/prisma';
-import { User } from '@prisma/client';
 
 type UpdateResult = { success: boolean; message: string };
+type DbUser = NonNullable<Awaited<ReturnType<typeof prisma.user.findUnique>>>;
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -17,7 +17,7 @@ export const UserManager = {
   /**
    * Поиск пользователя по ID, username или fragmentId
    */
-  async findUser(query: string): Promise<User | null> {
+  async findUser(query: string): Promise<DbUser | null> {
     if (!query) return null;
 
     // По username

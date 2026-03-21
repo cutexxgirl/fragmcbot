@@ -2,10 +2,11 @@ import { BotContext } from '../../types/context';
 import { UserManager } from '../../modules/user/manager';
 import { Markup } from 'telegraf';
 import { prisma } from '../../database/prisma';
-import { User } from '@prisma/client';
 import { SUBSCRIPTION_NAMES, SubscriptionLevel } from '../../config';
 import { isAdmin } from '../../utils/permissions';
 import { showAdminPanel } from './adminPanel';
+
+type DbUser = NonNullable<Awaited<ReturnType<typeof prisma.user.findUnique>>>;
 
 // --- ХЕЛПЕРЫ ---
 
@@ -17,7 +18,7 @@ const formatDate = (date: Date | null) => {
     return `✅ ${date.toLocaleDateString('ru-RU')} (${days} д.)`;
 };
 
-const generateProfileText = (user: User): string => {
+const generateProfileText = (user: DbUser): string => {
     const subscriptionLevelName = user.subscriptionLevel 
       ? SUBSCRIPTION_NAMES[user.subscriptionLevel as SubscriptionLevel] 
       : 'Нет';
@@ -65,7 +66,7 @@ export const requestUserQuery = async (ctx: BotContext) => {
 export const findAndShowUserCard = async (ctx: BotContext) => {
     if (!(await isAdmin(BigInt(ctx.from!.id)))) return;
     
-    let user: User | null = null;
+    let user: DbUser | null = null;
     let query: string | null = null;
 
     // Режим поиска по тексту от админа

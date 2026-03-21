@@ -1,18 +1,18 @@
 /**
  * Custom Authentication Script
- * Handles login, session validation, and particle animation
+ * Handles login, session validation, and particle animation.
  */
 
 // --- Particle Animation (Ported from launcher.html) ---
 document.addEventListener('DOMContentLoaded', () => {
     const canvas = document.getElementById('loginParticles');
     if (canvas) {
-        canvas.style.pointerEvents = 'none'; // Ensure clicks pass through
+        canvas.style.pointerEvents = 'none';
         const ctx = canvas.getContext('2d');
-        let width, height;
+        let width;
+        let height;
         let particles = [];
 
-        // Configuration
         const particleCount = 60;
         const connectionDistance = 120;
         const mouseDistance = 150;
@@ -29,7 +29,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 this.vx = (Math.random() - 0.5) * 1;
                 this.vy = (Math.random() - 0.5) * 1;
                 this.size = Math.random() * 2 + 1;
-                this.color = '#ffcd00'; // Yellow
+                this.color = '#ffcd00';
             }
 
             update() {
@@ -63,7 +63,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 particles[i].update();
                 particles[i].draw();
 
-                // Connections between particles
                 for (let j = i; j < particles.length; j++) {
                     const dx = particles[i].x - particles[j].x;
                     const dy = particles[i].y - particles[j].y;
@@ -80,7 +79,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
 
-                // Mouse interaction - draw lines to cursor
                 if (mouse.x && mouse.y) {
                     const dx = particles[i].x - mouse.x;
                     const dy = particles[i].y - mouse.y;
@@ -97,11 +95,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
             }
+
             requestAnimationFrame(animate);
         }
 
-        // Mouse interaction
-        let mouse = { x: null, y: null };
+        const mouse = { x: null, y: null };
         window.addEventListener('mousemove', (e) => {
             mouse.x = e.x;
             mouse.y = e.y;
@@ -120,19 +118,61 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // --- Auth Logic ---
 
+const getConfigManager = () => require('./assets/js/configmanager');
+
+const normalizeApiUrl = (value) => {
+    if (!value || typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed ? trimmed.replace(/\/+$/, '') : null;
+};
+
+const getSavedApiUrl = () => {
+    try {
+        const authData = getConfigManager().getAuthData();
+        return normalizeApiUrl(authData?.apiUrl);
+    } catch {
+        return null;
+    }
+};
+
+const resolveApiUrl = () => {
+    const runtimeApiUrl = normalizeApiUrl(globalThis.FRAGMENT_API_URL);
+    if (runtimeApiUrl) return runtimeApiUrl;
+
+    const envApiUrl = normalizeApiUrl(globalThis.process?.env?.FRAGMENT_API_URL);
+    if (envApiUrl) return envApiUrl;
+
+    const savedApiUrl = getSavedApiUrl();
+    if (savedApiUrl) return savedApiUrl;
+
+    try {
+        const localApiUrl = normalizeApiUrl(window.localStorage?.getItem('fragmentApiUrl'));
+        if (localApiUrl) return localApiUrl;
+    } catch {}
+
+    if (window.location?.origin && /^https?:/i.test(window.location.origin)) {
+        return normalizeApiUrl(window.location.origin);
+    }
+
+    return null;
+};
+
 const AuthManagerCustom = {
-    API_URL: 'http://85.198.81.194:3000',
+    getApiUrl() {
+        const apiUrl = resolveApiUrl();
+        if (!apiUrl) {
+            throw new Error('Не настроен адрес API. Укажите FRAGMENT_API_URL для лаунчера.');
+        }
+        return apiUrl;
+    },
 
     init() {
         this.bindEvents();
         this.checkStartupSession();
-        
-        // Start hourly validation
         setInterval(() => this.validateSession(), 60 * 60 * 1000);
     },
 
     bindEvents() {
-        // Toggle Password Visibility
         document.getElementById('toggleToken')?.addEventListener('click', () => {
             const input = document.getElementById('loginToken');
             input.type = input.type === 'password' ? 'text' : 'password';
@@ -143,7 +183,6 @@ const AuthManagerCustom = {
             input.type = input.type === 'password' ? 'text' : 'password';
         });
 
-        // Form Submit
         document.getElementById('customLoginForm')?.addEventListener('submit', (e) => {
             e.preventDefault();
             this.login();
@@ -164,80 +203,56 @@ const AuthManagerCustom = {
         }
 
         try {
+            const apiUrl = this.getApiUrl();
+
             submitBtn.disabled = true;
             submitBtn.textContent = 'ВХОД...';
             errorEl.style.display = 'none';
 
-            console.log('[AUTH] Starting login process...');
-            console.log('[AUTH] Token (UUID):', token);
-            console.log('[AUTH] Nickname:', nickname);
-            console.log('[AUTH] Remember Me:', remember);
-
-            // 1. Auth Request
-            console.log('[AUTH] Step 1: Sending POST to', `${this.API_URL}/auth/login`);
-            const requestBody = { accessToken: token, password: password };
-            console.log('[AUTH] Request body:', { accessToken: token, password: '***' });
-            
-            const response = await fetch(`${this.API_URL}/auth/login`, {
+            const response = await fetch(`${apiUrl}/auth/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody) 
+                body: JSON.stringify({ accessToken: token, password })
             });
-
-            console.log('[AUTH] Step 1: Response status:', response.status, response.statusText);
 
             if (!response.ok) {
                 if (response.status === 503) {
-                    console.error('[AUTH] Server unavailable (503)');
                     throw new Error('Сервер временно недоступен. Попробуйте позже.');
                 } else if (response.status === 500) {
-                    console.error('[AUTH] Server error (500)');
                     throw new Error('Ошибка сервера. Попробуйте позже.');
                 } else if (response.status === 401 || response.status === 403) {
-                    console.error('[AUTH] Auth failed (401/403)');
                     throw new Error('Неверные данные входа');
                 } else {
-                    console.error('[AUTH] Unexpected error:', response.status);
                     throw new Error('Ошибка соединения с сервером');
                 }
             }
 
             const data = await response.json();
             const accessToken = data.accessToken;
-            console.log('[AUTH] Step 1: Received access token:', accessToken ? 'YES' : 'NO');
 
-            // 2. Get Profile
-            console.log('[AUTH] Step 2: Fetching profile from', `${this.API_URL}/user/me`);
-            const profileRes = await fetch(`${this.API_URL}/user/me`, {
-                headers: { 'Authorization': `Bearer ${accessToken}` }
+            const profileRes = await fetch(`${apiUrl}/user/me`, {
+                headers: { Authorization: `Bearer ${accessToken}` }
             });
 
-            console.log('[AUTH] Step 2: Response status:', profileRes.status);
-            if (!profileRes.ok) throw new Error('Ошибка получения профиля');
-            const profile = await profileRes.json();
-            console.log('[AUTH] Step 2: Profile loaded:', profile);
+            if (!profileRes.ok) {
+                throw new Error('Ошибка получения профиля');
+            }
 
-            // 3. Save Session
-            console.log('[AUTH] Step 3: Saving session to ConfigManager...');
-            const ConfigManager = require('./assets/js/configmanager');
+            const profile = await profileRes.json();
+            const ConfigManager = getConfigManager();
             ConfigManager.setAuthData({
-                accessToken: accessToken,
-                uuid: token, // Saving the ID entered
-                password: remember ? password : null, // Only save if remember is checked
+                accessToken,
+                uuid: token,
+                password: remember ? password : null,
                 gameNickname: nickname,
                 userProfile: profile,
+                apiUrl,
                 lastLogin: new Date().toISOString()
             });
-            console.log('[AUTH] Step 3: Session saved');
 
-            // 4. Success
-            console.log('[AUTH] Login successful! Proceeding to main UI...');
             this.onLoginSuccess();
-
         } catch (err) {
             console.error('[AUTH] Login failed:', err);
-            console.error('[AUTH] Error message:', err.message);
-            console.error('[AUTH] Full error:', err);
             this.showError(err.message || 'Ошибка соединения с сервером');
         } finally {
             submitBtn.disabled = false;
@@ -246,53 +261,53 @@ const AuthManagerCustom = {
     },
 
     async checkStartupSession() {
-        const ConfigManager = require('./assets/js/configmanager');
+        const ConfigManager = getConfigManager();
         const authData = ConfigManager.getAuthData();
 
-        if (authData && authData.accessToken) {
-            // Validate token
+        if (authData?.accessToken) {
             try {
-                const res = await fetch(`${this.API_URL}/user/me`, {
-                    headers: { 'Authorization': `Bearer ${authData.accessToken}` }
+                const apiUrl = this.getApiUrl();
+                const res = await fetch(`${apiUrl}/user/me`, {
+                    headers: { Authorization: `Bearer ${authData.accessToken}` }
                 });
 
-                if (res.ok) {
-                    const profile = await res.json();
-                    if (profile.status === 'frozen' || profile.status === 'expired') {
-                        throw new Error('Аккаунт заморожен или истек');
-                    }
-                    
-                    // Update profile and proceed
-                    ConfigManager.setAuthData({ ...authData, userProfile: profile });
-                    this.onLoginSuccess();
-                } else {
-                    throw new Error('Сессия истекла');
+                if (!res.ok) {
+                    return;
                 }
+
+                const profile = await res.json();
+                if (profile.status === 'frozen' || profile.status === 'expired') {
+                    throw new Error('Аккаунт заморожен или истек');
+                }
+
+                ConfigManager.setAuthData({ ...authData, userProfile: profile, apiUrl });
+                this.onLoginSuccess();
             } catch (err) {
                 console.log('Startup session check failed:', err);
-                // Don't show error or pre-fill on first load, just leave login visible
             }
         }
-        // If no auth data, login modal stays visible (it's default state)
     },
 
     async validateSession() {
-        const ConfigManager = require('./assets/js/configmanager');
+        const ConfigManager = getConfigManager();
         const authData = ConfigManager.getAuthData();
 
         if (!authData?.accessToken) return;
 
         try {
-            const res = await fetch(`${this.API_URL}/user/me`, {
-                headers: { 'Authorization': `Bearer ${authData.accessToken}` }
+            const apiUrl = this.getApiUrl();
+            const res = await fetch(`${apiUrl}/user/me`, {
+                headers: { Authorization: `Bearer ${authData.accessToken}` }
             });
 
             if (!res.ok) throw new Error('Token expired');
-            
+
             const profile = await res.json();
             if (profile.status === 'frozen' || profile.status === 'expired') {
                 throw new Error('Account status invalid');
             }
+
+            ConfigManager.setAuthData({ ...authData, userProfile: profile, apiUrl });
         } catch (err) {
             console.warn('Session validation failed:', err);
             this.logout();
@@ -301,35 +316,24 @@ const AuthManagerCustom = {
     },
 
     onLoginSuccess() {
-        // Hide login container
         document.getElementById('customLoginContainer').style.display = 'none';
-        
-        // Show landing (using global switchView if available, or just fading in)
-        // Assuming standard Helios/Electron launcher structure where we have views
+
         if (typeof switchView === 'function' && typeof VIEWS !== 'undefined') {
             switchView(getCurrentView(), VIEWS.landing);
         } else {
-            // Fallback if switchView isn't ready yet
             const landing = document.getElementById('landingContainer');
             if (landing) {
                 landing.style.display = 'block';
                 landing.style.opacity = '1';
             }
         }
-        
-        // Load account data into dashboard if it exists
+
         if (typeof AccountManager !== 'undefined' && AccountManager.init) {
             AccountManager.init();
         }
     },
 
     logout() {
-        const ConfigManager = require('./assets/js/configmanager');
-        // Keep credentials if "remember me" was used? 
-        // The prompt says "Fields not cleared" on error, but for explicit logout usually we clear.
-        // However, for "Auto-check -> frozen/expired -> THROW TO LOGIN", we should keep fields.
-        
-        // We just show the login container again.
         document.getElementById('customLoginContainer').style.display = 'flex';
     },
 
@@ -340,7 +344,6 @@ const AuthManagerCustom = {
     }
 };
 
-// Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
     AuthManagerCustom.init();
 });

@@ -84,7 +84,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       ]);
 
       return {
-        data: users.map(u => ({
+        data: users.map((u: any) => ({
           ...u,
           telegramId: u.telegramId.toString(),
           giftedById: u.giftedById?.toString() || null,
@@ -132,19 +132,19 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
           giftedById: user.giftedById?.toString() || null,
           discordId: user.discordId?.toString() || null,
           // Serialize relations
-          sharedByMe: user.sharedByMe.map(s => ({
+          sharedByMe: user.sharedByMe.map((s: any) => ({
               ...s,
               ownerId: s.ownerId.toString(),
               guestId: s.guestId.toString(),
               guest: { ...s.guest, telegramId: s.guest.telegramId.toString(), discordId: s.guest.discordId?.toString() || null, giftedById: s.guest.giftedById?.toString() || null }
           })),
-          sharedToMe: user.sharedToMe.map(s => ({
+          sharedToMe: user.sharedToMe.map((s: any) => ({
             ...s,
             ownerId: s.ownerId.toString(),
             guestId: s.guestId.toString(),
             owner: { ...s.owner, telegramId: s.owner.telegramId.toString(), discordId: s.owner.discordId?.toString() || null, giftedById: s.owner.giftedById?.toString() || null }
         })),
-        supportTickets: user.supportTickets.map(t => ({
+        supportTickets: user.supportTickets.map((t: any) => ({
             ...t,
             userId: t.userId.toString(),
             agentId: t.agentId?.toString() || null,
@@ -368,7 +368,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
           spark: 0,
           none: 0
       };
-      usersByLevel.forEach(g => {
+      usersByLevel.forEach((g: any) => {
           if (g.subscriptionLevel) {
               (levels as any)[g.subscriptionLevel] = g._count.telegramId;
           } else {
@@ -424,9 +424,9 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
           where: { agentId: { not: null }, status: 'closed' }
       });
 
-      const result = agents.map(agent => {
-          const total = ticketStats.find(s => s.agentId === agent.telegramId)?._count.id || 0;
-          const closed = closedStats.find(s => s.agentId === agent.telegramId)?._count.id || 0;
+      const result = agents.map((agent: any) => {
+          const total = ticketStats.find((s: any) => s.agentId === agent.telegramId)?._count.id || 0;
+          const closed = closedStats.find((s: any) => s.agentId === agent.telegramId)?._count.id || 0;
           
           return {
               id: agent.telegramId.toString(),

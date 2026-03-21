@@ -2,7 +2,8 @@ import { prisma } from '../../database/prisma';
 import { bot } from '../../bot';
 import { logEvent } from '../statistics/logger';
 import { config, TicketStatus, SUBSCRIPTION_NAMES, SubscriptionLevel } from '../../config';
-import { User } from '@prisma/client';
+
+type DbUser = NonNullable<Awaited<ReturnType<typeof prisma.user.findUnique>>>;
 
 export class SupportSystem {
   
@@ -186,7 +187,7 @@ ${profileInfo}
     };
   }
 
-  private static async getUserProfileInfo(user: User): Promise<string> {
+  private static async getUserProfileInfo(user: DbUser): Promise<string> {
     const formatDate = (date: Date | null) => {
       if (!date) return 'Нет';
       const now = new Date();
