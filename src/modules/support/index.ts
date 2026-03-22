@@ -2,10 +2,92 @@ import { prisma } from '../../database/prisma';
 import { bot } from '../../bot';
 import { logEvent } from '../statistics/logger';
 import { config, TicketStatus, SUBSCRIPTION_NAMES, SubscriptionLevel } from '../../config';
+import { UserManager } from '../user/manager';
 
 type DbUser = NonNullable<Awaited<ReturnType<typeof prisma.user.findUnique>>>;
+type SupportedMessage = Record<string, any>;
+
+const DUPLICATE_TICKET_LOOKBACK_DAYS = 14;
+const MIN_REASON_LENGTH = 12;
+const MEDIA_WITHOUT_TEXT_PLACEHOLDER = '[Медиа без подписи]';
+
+function extractMessageText(message: SupportedMessage): string {
+  if (typeof message.text === 'string') {
+    return message.text;
+  }
+
+  if (typeof message.caption === 'string') {
+    return message.caption;
+  }
+
+  return '';
+}
+
+function extractMediaFileId(message: SupportedMessage): string | undefined {
+  if (message.photo?.length) {
+    return message.photo[message.photo.length - 1].file_id;
+  }
+
+  if (message.video) {
+    return message.video.file_id;
+  }
+
+  if (message.animation) {
+    return message.animation.file_id;
+  }
+
+  if (message.document) {
+    return message.document.file_id;
+  }
+
+  return undefined;
+}
+
+function normalizeSupportReason(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 export class SupportSystem {
+  private static async findDuplicateClosedTicket(userId: bigint, normalizedReason: string) {
+    const lookbackDate = new Date(Date.now() - DUPLICATE_TICKET_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+
+    const recentTickets = await prisma.supportTicket.findMany({
+      where: {
+        userId,
+        status: TicketStatus.CLOSED,
+        closedAt: {
+          gte: lookbackDate,
+        },
+      },
+      orderBy: {
+        closedAt: 'desc',
+      },
+      take: 10,
+      include: {
+        messages: {
+          where: {
+            senderId: userId,
+            senderRole: 'user',
+          },
+          orderBy: {
+            createdAt: 'asc',
+          },
+          take: 1,
+        },
+      },
+    });
+
+    return recentTickets.find((ticket: (typeof recentTickets)[number]) => {
+      const previousReason = normalizeSupportReason(ticket.messages[0]?.message || '');
+      return previousReason.length >= MIN_REASON_LENGTH && previousReason === normalizedReason;
+    });
+  }
   
   static async createTicket(
     userId: bigint, 
@@ -29,6 +111,45 @@ export class SupportSystem {
       };
     }
 
+    const messageText = extractMessageText(message);
+    const normalizedReason = normalizeSupportReason(messageText);
+
+    if (normalizedReason.length >= MIN_REASON_LENGTH) {
+      const duplicateTicket = await this.findDuplicateClosedTicket(userId, normalizedReason);
+
+      if (duplicateTicket) {
+        const banReason = `Повторный тикет по той же причине (#${duplicateTicket.id})`;
+        await UserManager.banUser(userId, banReason);
+        await logEvent('support_duplicate_ticket_ban', userId, {
+          previousTicketId: duplicateTicket.id,
+        });
+
+        try {
+          await bot.telegram.sendMessage(
+            Number(userId),
+            '🚫 Новый тикет по той же причине открывать нельзя.\nДоступ к поддержке закрыт.'
+          );
+        } catch (error) {
+          console.log(`Cannot notify banned user ${userId}`);
+        }
+
+        try {
+          await bot.telegram.sendMessage(
+            Number(config.groups.support),
+            `🚫 Автобан за повторный тикет по той же причине\nID: ${userId}\nПредыдущий тикет: #${duplicateTicket.id}`
+          );
+        } catch (error) {
+          console.log('Cannot send duplicate ticket ban message to support group');
+        }
+
+        return {
+          success: false,
+          message: 'Повторный тикет по той же причине запрещён. Доступ к поддержке закрыт.',
+          banned: true,
+        };
+      }
+    }
+
     const ticket = await prisma.supportTicket.create({
       data: {
         userId,
@@ -40,32 +161,14 @@ export class SupportSystem {
     });
 
     // Сохраняем сообщение в БД - извлекаем текст из разных типов
-    let messageText = '';
-    let photoUrl: string | undefined;
-    
-    if (message.text) {
-      messageText = message.text;
-    } else if (message.caption) {
-      messageText = message.caption;
-    }
-    
-    // Для БД сохраняем file_id первого медиа (для обратной совместимости)
-    if (message.photo) {
-      photoUrl = message.photo[message.photo.length - 1].file_id;
-    } else if (message.video) {
-      photoUrl = message.video.file_id;
-    } else if (message.animation) {
-      photoUrl = message.animation.file_id;
-    } else if (message.document) {
-      photoUrl = message.document.file_id;
-    }
+    const photoUrl = extractMediaFileId(message);
 
     await prisma.ticketMessage.create({
       data: {
         ticketId: ticket.id,
         senderId: userId,
         senderRole: 'user',
-        message: messageText || '[Медиа без подписи]',
+        message: messageText || MEDIA_WITHOUT_TEXT_PLACEHOLDER,
         photoUrl,
       },
     });
@@ -594,12 +697,12 @@ ${profileInfo}
       },
     });
 
-    await logEvent('close_ticket', ticket.userId, { ticketId });
+    await logEvent('close_ticket', ticket.userId, { ticketId, closedBy: closedBy.toString() });
 
     try {
       await bot.telegram.sendMessage(
         Number(ticket.userId),
-        `✅ Тикет #${ticketId} закрыт.\n\nЕсли у вас остались вопросы, создайте новый тикет.`
+        `✅ Тикет #${ticketId} закрыт.\n\nЕсли проблема новая и другая — откройте новый тикет.\nНовый тикет по той же причине = бан.`
       );
     } catch (error) {
       console.log(`Cannot notify user ${ticket.userId}`);
@@ -608,8 +711,7 @@ ${profileInfo}
     try {
       await bot.telegram.sendMessage(
         Number(config.groups.support),
-        `✅ Тикет #${ticketId} закрыт`,
-        { parse_mode: 'Markdown' }
+        `✅ Тикет #${ticketId} закрыт`
       );
     } catch (error) {
       console.log('Cannot send message to support group');

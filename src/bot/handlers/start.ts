@@ -2,7 +2,7 @@ import { BotContext } from '../../types/context';
 import { prisma } from '../../database/prisma';
 import { mainKeyboard } from '../keyboards/main';
 import { isAdmin } from '../../utils/permissions';
-import { SUBSCRIPTION_NAMES, config } from '../../config';
+import { SUBSCRIPTION_NAMES } from '../../config';
 import { syncUserStatus } from '../../modules/lifecycle';
 
 export const startHandler = async (ctx: BotContext) => {
@@ -136,23 +136,15 @@ export const startHandler = async (ctx: BotContext) => {
           );
         } else {
           // Новый пользователь
-          const globalPromo = await prisma.admin.findUnique({
-            where: { telegramId: config.bot.adminId },
-            select: { isPromoEnabled: true }
-          });
-
-          const promoText = globalPromo?.isPromoEnabled 
-            ? '\n\n💡 Сейчас доступна промо-акция! Используйте кнопку "Акция" в меню.'
-            : '';
-
           await ctx.reply(
             `👋 Добро пожаловать в Fragment!\n\n` +
             `Для активации подписки необходимо:\n` +
             `1. Оформить подписку на [Boosty](https://boosty.to/frgmc)\n` +
             `2. Вступить в одну из закрытых групп\n` +
             `3. Нажать /start для активации\n\n` +
+            `Если у вас есть промокод, используйте команду /promo ВАШ_КОД.\n\n` +
             `❓ Если у вас есть подписка, но доступ не активируется:\n` +
-            `Примите приглашение у бота @boosty\\_to\\_bot${promoText}`,
+            `Примите приглашение у бота @boosty\\_to\\_bot`,
             {
               parse_mode: 'Markdown',
               ...mainKeyboard(updatedUser, userIsAdmin)

@@ -2,7 +2,6 @@ import { BotContext } from '../../types/context';
 import { isAdmin } from '../../utils/permissions';
 import { checkAllSubscriptions } from '../../services/cron';
 import { SupportSystem } from '../../modules/support';
-import { prisma } from '../../database/prisma';
 import { UserManager } from '../../modules/user/manager';
 
 /**
@@ -61,110 +60,6 @@ export const adminCloseTicketHandler = async (ctx: BotContext) => {
     console.error('Error in admin close ticket handler:', error);
     await ctx.reply('❌ Ошибка при закрытии тикета');
   }
-};
-
-/**
- * Глобальное включение/выключение акции для всех пользователей
- * Устанавливается в таблице Admin
- */
-export const toggleGlobalPromoCommand = async (ctx: BotContext) => {
-  const adminId = BigInt(ctx.from!.id);
-  
-  if (!(await isAdmin(adminId))) {
-    return;
-  }
-
-  if (!ctx.message || !('text' in ctx.message)) {
-    return;
-  }
-
-  const commandText = ctx.message.text;
-  const enable = commandText.includes('promo_on');
-
-  try {
-    // Обновляем глобальную настройку в профиле админа
-    await prisma.admin.update({
-      where: { telegramId: adminId },
-      data: { 
-        isPromoEnabled: enable
-      },
-    });
-
-    console.log('[Promo] Global promo flag set to:', enable);
-
-    await ctx.reply(
-      enable 
-        ? `✅ Акция включена глобально\n\nНовые пользователи будут видеть кнопку "Акция" при первом /start`
-        : `❌ Акция выключена глобально\n\nНовые пользователи НЕ будут видеть кнопку "Акция"`
-    );
-  } catch (error) {
-    console.error('[Promo] Error updating global promo flag:', error);
-    await ctx.reply('❌ Ошибка при обновлении статуса акции');
-  }
-};
-
-/**
- * Включение акции для конкретного пользователя
- * Использование: /включить_акцию 123456789
- */
-export const enablePromoCommand = async (ctx: BotContext) => {
-  const adminId = BigInt(ctx.from!.id);
-  
-  if (!(await isAdmin(adminId))) {
-    return;
-  }
-
-  if (!ctx.message || !('text' in ctx.message)) {
-    return;
-  }
-
-  const match = ctx.message.text.match(/\/включить_акцию\s+(\d+)/);
-  
-  if (!match) {
-    await ctx.reply('❌ Использование: /включить_акцию <telegram_id>');
-    return;
-  }
-
-  const userId = BigInt(match[1]);
-  
-  await prisma.user.update({
-    where: { telegramId: userId },
-    data: { hasPromoAccess: true },
-  });
-
-  await ctx.reply(`✅ Кнопка акции включена для пользователя ${userId}`);
-};
-
-/**
- * Выключение акции для конкретного пользователя
- * Использование: /выключить_акцию 123456789
- */
-export const disablePromoCommand = async (ctx: BotContext) => {
-  const adminId = BigInt(ctx.from!.id);
-  
-  if (!(await isAdmin(adminId))) {
-    return;
-  }
-
-  if (!ctx.message || !('text' in ctx.message)) {
-    return;
-  }
-
-  const match = ctx.message.text.match(/\/выключить_акцию\s+(\d+)/);
-  
-  if (!match) {
-    await ctx.reply('❌ Использование: /выключить_акцию <telegram_id>');
-    return;
-  }
-
-  const userId = BigInt(match[1]);
-  
-  await prisma.user.update({
-    where: { telegramId: userId },
-    data: { hasPromoAccess: false },
-  });
-
-  await ctx.reply(`❌ Кнопка акции выключена для пользователя ${userId}`);
 };
 
 /**

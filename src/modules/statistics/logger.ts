@@ -7,6 +7,7 @@ export type EventType =
   | 'cancel_subscription'
   | 'new_ticket'
   | 'close_ticket'
+  | 'support_duplicate_ticket_ban'
   | 'promo_click'
   | 'promo_approved'
   | 'promo_rejected'

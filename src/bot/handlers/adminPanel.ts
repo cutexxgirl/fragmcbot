@@ -20,7 +20,7 @@ export const showAdminPanel = async (ctx: BotContext) => {
     ],
     [
       Markup.button.callback('📊 Статистика', 'admin_stats'),
-      Markup.button.callback('🎫 Управление тикетами', 'admin_tickets'),
+      Markup.button.callback('🎫 Тикеты и модерация', 'admin_tickets'),
     ],
     [
       Markup.button.callback('✅ Проверить подписки', 'admin_check_subs'),
@@ -38,7 +38,10 @@ export const showAdminPanel = async (ctx: BotContext) => {
     ]);
   }
 
-  const message = '⚙️ **Админ-панель**\n\nВыберите раздел:';
+  const message =
+    '⚙️ **Админ-панель**\n\n' +
+    'Поддержка: только лаунчер, сайт, бот и чистая сборка.\n' +
+    'Промокоды работают отдельно. Старой "Акции" больше нет.';
 
   if (ctx.callbackQuery) {
     try {
@@ -260,7 +263,10 @@ export const showTicketsMenu = async (ctx: BotContext) => {
   ]);
 
   await ctx.editMessageText(
-    '🎫 **Управление тикетами**\n\n⚠️ Внимание: удаление необратимо!',
+    '🎫 **Тикеты и модерация**\n\n' +
+    '• Повторный тикет по той же причине после закрытия = бан\n' +
+    '• В поддержку идут только лаунчер, сайт, бот и чистая сборка\n\n' +
+    '⚠️ Очистка необратима.',
     {
       parse_mode: 'Markdown',
       ...keyboard,

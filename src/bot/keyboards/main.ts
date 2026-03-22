@@ -1,12 +1,10 @@
 import { Markup } from 'telegraf';
 
-const LAUNCHER_URL =
-  'https://github.com/cutexxgirl/Fragment-Launcher-Public/releases/download/1.1.0/FragmentLauncher-setup-1.1.0.exe';
+const LAUNCHER_URL = 'https://fragmc.ru/downloads/FragmentLauncher-setup.exe';
 
 type KeyboardUser = {
   status: string;
   isFrozen: boolean;
-  hasPromoAccess: boolean;
 };
 
 export const mainKeyboard = (user: KeyboardUser, isAdmin: boolean) => {
@@ -15,9 +13,6 @@ export const mainKeyboard = (user: KeyboardUser, isAdmin: boolean) => {
   const showDownload = (user.status === 'active' || user.status === 'shared') && !user.isFrozen;
 
   if (!showDownload) {
-    if (user.hasPromoAccess) {
-      // buttons.push(['🎃 Акция']);
-    }
     buttons.push(['📖 Инструкция']);
   }
 

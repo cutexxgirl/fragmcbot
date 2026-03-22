@@ -111,12 +111,37 @@ export const UserManager = {
     const user = await prisma.user.findUnique({ where: { telegramId: userId } });
     if (!user) return { success: false, message: '❌ Пользователь не найден.' };
 
-    await prisma.user.update({
-      where: { telegramId: userId },
-      data: { bannedAt: new Date(), banReason: reason || null },
-    });
+    if (user.bannedAt) {
+      return { success: false, message: '🚫 Пользователь уже забанен.' };
+    }
 
-    return { success: true, message: '🚫 Пользователь забанен.' };
+    const bannedAt = new Date();
+
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { telegramId: userId },
+        data: { bannedAt, banReason: reason || null },
+      }),
+      prisma.supportTicket.updateMany({
+        where: {
+          userId,
+          status: {
+            in: ['open', 'in_progress'],
+          },
+        },
+        data: {
+          status: 'closed',
+          closedAt: bannedAt,
+        },
+      }),
+    ]);
+
+    return {
+      success: true,
+      message: reason
+        ? `🚫 Пользователь забанен.\nПричина: ${reason}`
+        : '🚫 Пользователь забанен.',
+    };
   },
 
   /**
@@ -125,6 +150,10 @@ export const UserManager = {
   async unbanUser(userId: bigint): Promise<UpdateResult> {
     const user = await prisma.user.findUnique({ where: { telegramId: userId } });
     if (!user) return { success: false, message: '❌ Пользователь не найден.' };
+
+    if (!user.bannedAt) {
+      return { success: false, message: '✅ Пользователь и так не забанен.' };
+    }
 
     await prisma.user.update({
       where: { telegramId: userId },

@@ -65,7 +65,7 @@ bot.use(async (ctx, next) => {
 import { startHandler } from './handlers/start';
 import { profileHandler } from './handlers/profile';
 import { instructionHandler } from './handlers/instruction';
-import { adminCheckSubscriptionsHandler, adminCloseTicketHandler, enablePromoCommand, disablePromoCommand, banCommand, unbanCommand } from './handlers/admin';
+import { adminCheckSubscriptionsHandler, adminCloseTicketHandler, banCommand, unbanCommand } from './handlers/admin';
 import { supportHandler, closeTicketHandler, handleTicketMessage } from './handlers/support';
 import { handleSupportGroupMessage } from './handlers/supportGroup';
 
@@ -82,12 +82,11 @@ import {
   handleCustomPeriodInput,
 } from './handlers/adminPanel';
 import { 
-  promoHandler, handlePromoProof, handlePromoGrant, handlePromoAccess, handlePromoAddSelection,
+  handlePromoProof, handlePromoGrant, handlePromoAccess, handlePromoAddSelection,
   handlePromoConfirm, handlePromoClearSelection, handlePromoReject, handlePromoBack,
   handlePromoRequestCustomDuration, handlePromoCustomDurationInput,
 } from './handlers/promo';
 import { handleAgentIdInput } from './handlers/adminAgentInput';
-import { toggleGlobalPromoCommand } from './handlers/admin';
 import { handleShareAccess, handleShareAdd, handleShareUserInput, handleShareRevoke } from './handlers/sharing';
 import { validateSharedAccess } from '../modules/lifecycle/sharing';
 
@@ -112,8 +111,6 @@ bot.command('unban', unbanCommand);
 bot.command('wipe_all_data', executeFullWipe);
 bot.command('checksubs', adminCheckSubscriptionsHandler);
 bot.command('close', adminCloseTicketHandler);
-bot.command('promo_on', (ctx) => toggleGlobalPromoCommand(ctx));
-bot.command('promo_off', (ctx) => toggleGlobalPromoCommand(ctx));
 import { promoCodeHandler } from './handlers/promoCodeHandler';
 bot.command('promo', promoCodeHandler);
 import { getPrivateChannelLink } from './handlers/privateChannel';
@@ -125,7 +122,6 @@ bot.action('get_private_link_btn', getPrivateChannelLink);
 bot.hears('👤 Профиль', profileHandler);
 bot.hears('🆘 Поддержка', supportHandler);
 bot.hears('❌ Закрыть тикет', closeTicketHandler);
-// bot.hears('🎁 Акция', promoHandler); // Скрыто по просьбе
 bot.hears('⚙️ Админ-панель', showAdminPanel);
 bot.hears('📖 Инструкция', instructionHandler);
 bot.hears('✈️ Канал', (ctx) => {
