@@ -12,6 +12,10 @@ export const config = {
   api: {
     port: parseInt(process.env.API_PORT || '3000'),
     host: process.env.API_HOST || '0.0.0.0',
+    corsOrigins: (process.env.API_CORS_ORIGINS || 'https://fragmc.ru,https://www.fragmc.ru,http://localhost:5173')
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean),
   },
   groups: {
     novice: BigInt(process.env.GROUP_NOVICE_ID!),

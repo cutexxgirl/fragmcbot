@@ -3,6 +3,7 @@ import { config } from '../config';
 import { BotContext } from '../types/context';
 import { message } from 'telegraf/filters';
 import { prisma } from '../database/prisma';
+import { antiSpamMiddleware } from './spamGuard';
 
 export const bot = new Telegraf<BotContext>(config.bot.token, {
   telegram: {
@@ -28,6 +29,8 @@ bot.use(session({
     awaitingShareUser: false
   }),
 }));
+
+bot.use(antiSpamMiddleware);
 
 // --- DEBUG: LOG ALL UPDATES ---
 // bot.use(async (ctx, next) => {
